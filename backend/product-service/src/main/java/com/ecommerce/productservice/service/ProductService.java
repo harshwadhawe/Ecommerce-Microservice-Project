@@ -70,7 +70,7 @@ public class ProductService {
     public Page<Product> getActiveProducts(int page, int size, String sortBy, String sortDir) {
         Sort sort = sortDir.equalsIgnoreCase("desc") ? Sort.by(sortBy).descending() : Sort.by(sortBy).ascending();
         Pageable pageable = PageRequest.of(page, size, sort);
-        return productRepository.findAll(pageable).map(product -> product.getIsActive() ? product : null);
+        return productRepository.findByIsActiveTrue(pageable);
     }
 
     public Page<Product> getProductsByCategory(String category, int page, int size, String sortBy, String sortDir) {

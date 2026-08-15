@@ -1,5 +1,7 @@
 # E-commerce Microservices Application
 
+[![CI](https://github.com/harshwadhawe/Ecommerce-Microservice-Project/actions/workflows/ci.yml/badge.svg)](https://github.com/harshwadhawe/Ecommerce-Microservice-Project/actions/workflows/ci.yml)
+
 A comprehensive e-commerce web application built with Spring Boot microservices architecture, React.js frontend, and containerized with Docker.
 
 ## Architecture Overview
@@ -185,24 +187,94 @@ npm start
 
 ## Testing
 
+Requires Java 17. If `java -version` reports anything older:
+
+```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 17)   # macOS
+```
+
 ### Unit Tests
-```bash
-# Run tests for specific service
-cd backend/user-service
-mvn test
 
-# Run tests for all services
-./run-tests.sh
+78 tests across the user, product, cart and payment services. No databases required — they run
+against mocks and finish in seconds.
+
+```bash
+# One service
+mvn -f backend/cart-service/pom.xml test
+
+# All services
+for s in user product cart payment; do mvn -f backend/$s-service/pom.xml test; done
+
+# A single class, or a single method
+mvn -f backend/cart-service/pom.xml test -Dtest=CartServiceTest
+mvn -f backend/cart-service/pom.xml test -Dtest=CartTest#addingSameProductTwiceMergesQuantities
 ```
 
-### Integration Tests
-```bash
-# Start test environment
-docker-compose -f docker-compose.test.yml up -d
+What they cover:
 
-# Run integration tests
-mvn verify -Pintegration-test
+| Service | Tests | Focus |
+|---------|-------|-------|
+| user-service | 23 | password hashing, duplicate registration, patch semantics, JWT expiry/forgery/tampering, HTTP status mappings |
+| product-service | 20 | soft delete, stock floor at zero, active-product filtering, pagination and sort defaults, validation |
+| cart-service | 30 | line-item merging, BigDecimal totals, stock rejection, Redis TTL refresh, JSON round-trip |
+| payment-service | 7 | success/failure branches with a stubbed `Random`, transaction ids, request validation |
+| order-service | 0 | not implemented |
+
+### Coverage
+
+JaCoCo runs on `verify` and writes an HTML report. It is report-only — no minimum threshold is
+enforced, so coverage never fails a build.
+
+```bash
+mvn -f backend/cart-service/pom.xml verify
+open backend/cart-service/target/site/jacoco/index.html
 ```
+
+### End-to-End Tests
+
+`test-e2e.sh` drives the real HTTP APIs across all four working services: registration, login, JWT
+protection, product CRUD, search, cart merging and stock limits, and payment processing. It creates
+a uniquely-named user and product, then deletes both.
+
+```bash
+# 1. Databases
+docker-compose up -d mysql mongodb redis
+
+# 2. Services (each in its own terminal)
+export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+mvn -f backend/user-service/pom.xml    spring-boot:run
+mvn -f backend/product-service/pom.xml spring-boot:run
+mvn -f backend/cart-service/pom.xml    spring-boot:run
+mvn -f backend/payment-service/pom.xml spring-boot:run
+
+# 3. Run
+./test-e2e.sh                # or: HOST=<host> ./test-e2e.sh
+```
+
+Requires `jq`. Exits non-zero on the first failing expectation, so it works as a CI gate. The
+checkout step is skipped and reported as such — order-service has no implementation yet.
+
+### Continuous Integration
+
+`.github/workflows/ci.yml` runs on every push:
+
+| Job | What it does |
+|-----|--------------|
+| `unit` | `mvn verify` per service in parallel (matrix of 5), uploads each JaCoCo report as a build artifact |
+| `frontend` | `npm ci && npm run build` |
+| `e2e` | Boots MySQL, MongoDB and Redis as service containers, builds and launches the four service jars, then runs `test-e2e.sh` |
+
+The e2e job needs no extra configuration — the service-container credentials match the defaults
+already in each `application.yml`. It sets `WAIT_SECONDS=180` so the script waits for JVM startup
+instead of failing fast, and dumps the last 100 lines of every service log when a run fails.
+
+### Not Yet Covered
+
+- **Repository queries.** `ProductRepository`'s regex `@Query` methods are only exercised through
+  the e2e script. Testcontainers-backed `@DataMongoTest` would verify them properly.
+- **Frontend.** The React pages render hardcoded fixtures and make no API calls, so UI tests would
+  assert against mock data. Worth writing once the pages talk to the services.
+- **Order flow.** Blocked on order-service.
 
 ## AWS Deployment
 

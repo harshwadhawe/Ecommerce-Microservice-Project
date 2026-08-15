@@ -2,6 +2,8 @@ package com.ecommerce.cartservice.repository;
 
 import com.ecommerce.cartservice.entity.Cart;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Repository;
@@ -11,6 +13,8 @@ import java.util.concurrent.TimeUnit;
 
 @Repository
 public class CartRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(CartRepository.class);
 
     private static final String CART_KEY_PREFIX = "cart:";
     private static final long CART_EXPIRATION_HOURS = 24;
@@ -31,7 +35,8 @@ public class CartRepository {
                 return Optional.of(cart);
             }
         } catch (Exception e) {
-            // Log error appropriately
+            // Never silent: an unreadable cart is indistinguishable from an empty one to the caller.
+            log.warn("Discarding unreadable cart for user {}", userId, e);
         }
         return Optional.empty();
     }

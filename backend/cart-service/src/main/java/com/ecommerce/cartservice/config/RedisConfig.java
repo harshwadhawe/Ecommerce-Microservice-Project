@@ -1,5 +1,6 @@
 package com.ecommerce.cartservice.config;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.context.annotation.Bean;
@@ -30,6 +31,9 @@ public class RedisConfig {
     public ObjectMapper objectMapper() {
         ObjectMapper mapper = new ObjectMapper();
         mapper.registerModule(new JavaTimeModule());
+        // Cart.getTotalAmount()/getTotalItems() and CartItem.getSubtotal() serialize as properties
+        // but have no setters, so a strict mapper cannot read its own output back.
+        mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         return mapper;
     }
 }

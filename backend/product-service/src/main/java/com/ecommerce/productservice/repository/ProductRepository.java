@@ -18,7 +18,9 @@ public interface ProductRepository extends MongoRepository<Product, String> {
     List<Product> findByBrand(String brand);
     
     List<Product> findByIsActiveTrue();
-    
+
+    Page<Product> findByIsActiveTrue(Pageable pageable);
+
     @Query("{'name': {'$regex': ?0, '$options': 'i'}}")
     List<Product> findByNameContainingIgnoreCase(String name);
     
