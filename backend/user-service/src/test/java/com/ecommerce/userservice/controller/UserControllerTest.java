@@ -117,14 +117,28 @@ class UserControllerTest {
     }
 
     @Test
-    void badCredentialsDoNotLeakWhetherTheAccountExists() throws Exception {
+    void badCredentialsReturnUnauthorizedNotServerError() throws Exception {
         when(authenticationManager.authenticate(any())).thenThrow(new BadCredentialsException("Bad credentials"));
 
         mockMvc.perform(post("/api/users/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"a@b.com\",\"password\":\"wrong\"}"))
-                .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.error").value("An unexpected error occurred"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("Invalid email or password"));
+    }
+
+    @Test
+    void malformedJsonIsAClientErrorNotAServerError() throws Exception {
+        mockMvc.perform(post("/api/users/register").contentType(MediaType.APPLICATION_JSON).content("{not json"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void wrongHttpMethodIsRejectedAsMethodNotAllowed() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/users/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"a@b.com\",\"password\":\"password123\"}"))
+                .andExpect(status().isMethodNotAllowed());
     }
 
     @Test

@@ -7,6 +7,7 @@ import com.ecommerce.cartservice.service.CartService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -15,6 +16,9 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/cart")
 @CrossOrigin(origins = "*")
+// A cart belongs to the user whose id is in the token. Applied at class level so a new endpoint
+// cannot forget it; every handler here takes {userId}, which is what authentication.name holds.
+@PreAuthorize("#userId == authentication.name")
 public class CartController {
 
     @Autowired

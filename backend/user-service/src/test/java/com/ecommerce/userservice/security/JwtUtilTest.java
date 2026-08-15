@@ -11,6 +11,7 @@ import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -74,6 +75,27 @@ class JwtUtilTest {
         String tampered = token.substring(0, token.lastIndexOf('.')) + ".bm90LWEtc2lnbmF0dXJl";
 
         assertThrows(JwtException.class, () -> jwtUtil.extractUsername(tampered));
+    }
+
+    @Test
+    void tokenCarriesTheNumericUserIdForOtherServices() {
+        com.ecommerce.userservice.entity.User entity = new com.ecommerce.userservice.entity.User();
+        entity.setId(7L);
+        entity.setEmail("a@b.com");
+        entity.setPassword("hashed");
+
+        String token = jwtUtil.generateToken(entity);
+
+        assertEquals("7", jwtUtil.extractClaim(token, claims -> claims.get("userId").toString()));
+        assertEquals("a@b.com", jwtUtil.extractUsername(token));
+    }
+
+    @Test
+    void tokensForNonEntityPrincipalsStillWork() {
+        String token = jwtUtil.generateToken(user);
+
+        assertNull(jwtUtil.extractClaim(token, claims -> claims.get("userId")));
+        assertEquals("a@b.com", jwtUtil.extractUsername(token));
     }
 
     @Test

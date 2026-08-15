@@ -88,7 +88,14 @@ call POST "$USER_URL/api/users/register" \
 check "invalid email returns 400" "400" "$STATUS"
 
 call POST "$USER_URL/api/users/login" "{\"email\":\"$EMAIL\",\"password\":\"wrong-password\"}"
-check "wrong password is rejected" "500" "$STATUS"   # no BadCredentials handler; falls through to the generic one
+check "wrong password returns 401" "401" "$STATUS"
+check "wrong password reveals nothing" "Invalid email or password" "$(echo "$BODY" | jq -r '.error')"
+
+call POST "$USER_URL/api/users/login" '{"email":"nobody-at-all@test.com","password":"password123"}'
+check "unknown account is indistinguishable" "401" "$STATUS"
+
+call POST "$USER_URL/api/users/register" 'not json at all'
+check "malformed JSON returns 400" "400" "$STATUS"
 
 call POST "$USER_URL/api/users/login" "{\"email\":\"$EMAIL\",\"password\":\"password123\"}"
 check "login returns 200" "200" "$STATUS"
@@ -156,6 +163,20 @@ check "unknown product returns 400" "400" "$STATUS"
 
 call GET "$CART_URL/api/cart/$CART_USER/validate"
 check "cart validates against stock" "true" "$(echo "$BODY" | jq -r '.valid')"
+
+SAVED_TOKEN="$TOKEN"
+TOKEN=""
+call GET "$CART_URL/api/cart/$CART_USER"
+check "cart without a token returns 401" "401" "$STATUS"
+call DELETE "$CART_URL/api/cart/$CART_USER"
+check "cart cannot be cleared without a token" "401" "$STATUS"
+TOKEN="$SAVED_TOKEN"
+
+OTHER_USER=$((CART_USER + 1))
+call GET "$CART_URL/api/cart/$OTHER_USER"
+check "another user's cart returns 403" "403" "$STATUS"
+call DELETE "$CART_URL/api/cart/$OTHER_USER"
+check "another user's cart cannot be cleared" "403" "$STATUS"
 
 call PUT "$CART_URL/api/cart/$CART_USER/items/$PRODUCT_ID" '{"quantity":1}'
 check "quantity update returns 200" "200" "$STATUS"

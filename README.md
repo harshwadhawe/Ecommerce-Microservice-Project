@@ -139,6 +139,11 @@ npm start
 - `GET /api/products/category/{category}` - Get products by category
 
 ### Cart Service (8083)
+
+All cart endpoints require `Authorization: Bearer <token>` from user-service login, and the
+`{userId}` must match the token's owner — otherwise 401 (no/invalid token) or 403 (someone else's
+cart).
+
 - `GET /api/cart/{userId}` - Get user's cart
 - `POST /api/cart/{userId}/items` - Add item to cart
 - `PUT /api/cart/{userId}/items/{productId}` - Update cart item
@@ -177,6 +182,7 @@ npm start
 - `REDIS_HOST` - Redis host (default: localhost)
 - `REDIS_PORT` - Redis port (default: 6379)
 - `PRODUCT_SERVICE_URL` - Product service URL
+- `JWT_SECRET` - Must be identical to user-service's, or every cart request returns 401
 
 #### Order Service
 - `MYSQL_HOST` - MySQL host
@@ -195,7 +201,7 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 17)   # macOS
 
 ### Unit Tests
 
-78 tests across the user, product, cart and payment services. No databases required — they run
+95 tests across the user, product, cart and payment services. No databases required — they run
 against mocks and finish in seconds.
 
 ```bash
@@ -214,9 +220,9 @@ What they cover:
 
 | Service | Tests | Focus |
 |---------|-------|-------|
-| user-service | 23 | password hashing, duplicate registration, patch semantics, JWT expiry/forgery/tampering, HTTP status mappings |
+| user-service | 27 | password hashing, duplicate registration, patch semantics, JWT expiry/forgery/tampering, 401 vs 500 on bad credentials |
 | product-service | 20 | soft delete, stock floor at zero, active-product filtering, pagination and sort defaults, validation |
-| cart-service | 30 | line-item merging, BigDecimal totals, stock rejection, Redis TTL refresh, JSON round-trip |
+| cart-service | 41 | line-item merging, BigDecimal totals, stock rejection, Redis TTL refresh, JSON round-trip, cart ownership, downstream outage handling |
 | payment-service | 7 | success/failure branches with a stubbed `Random`, transaction ids, request validation |
 | order-service | 0 | not implemented |
 
@@ -232,9 +238,10 @@ open backend/cart-service/target/site/jacoco/index.html
 
 ### End-to-End Tests
 
-`test-e2e.sh` drives the real HTTP APIs across all four working services: registration, login, JWT
-protection, product CRUD, search, cart merging and stock limits, and payment processing. It creates
-a uniquely-named user and product, then deletes both.
+`test-e2e.sh` runs 46 checks against the real HTTP APIs of all four working services: registration,
+login, JWT protection, cart ownership (401 without a token, 403 for someone else's cart), product
+CRUD, search, cart merging and stock limits, and payment processing. It creates a uniquely-named
+user and product, then deletes both.
 
 ```bash
 # 1. Databases

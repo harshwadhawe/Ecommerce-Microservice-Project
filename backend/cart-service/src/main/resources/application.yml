@@ -17,6 +17,9 @@ spring:
           max-idle: 8
           min-idle: 0
 
+jwt:
+  secret: ${JWT_SECRET:mySecretKey123456789012345678901234567890}
+
 app:
   product-service:
     url: ${PRODUCT_SERVICE_URL:http://localhost:8082}

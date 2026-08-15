@@ -1,5 +1,6 @@
 package com.ecommerce.userservice.security;
 
+import com.ecommerce.userservice.entity.User;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
@@ -50,6 +51,11 @@ public class JwtUtil {
 
     public String generateToken(UserDetails userDetails) {
         Map<String, Object> claims = new HashMap<>();
+        // Other services authorize on the numeric id (cart keys, order ownership), not the email
+        // subject, so it travels in the token rather than costing them a call to user-service.
+        if (userDetails instanceof User user && user.getId() != null) {
+            claims.put("userId", user.getId());
+        }
         return createToken(claims, userDetails.getUsername());
     }
 
