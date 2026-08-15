@@ -1,56 +1,71 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { clearCart, errorMessage, fetchCart, removeCartItem, updateCartItem } from '../api';
+import { getUser, isLoggedIn } from '../auth';
 import './Cart.css';
 
 const Cart = () => {
-  const [cartItems, setCartItems] = useState([
-    {
-      id: '1',
-      productId: '1',
-      name: 'Laptop',
-      price: 999.99,
-      quantity: 1,
-      imageUrl: '/api/placeholder/100/100'
-    },
-    {
-      id: '2',
-      productId: '2',
-      name: 'Smartphone',
-      price: 699.99,
-      quantity: 2,
-      imageUrl: '/api/placeholder/100/100'
-    }
-  ]);
+  const navigate = useNavigate();
+  const [cart, setCart] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
 
-  const updateQuantity = (id, newQuantity) => {
-    if (newQuantity <= 0) {
-      removeItem(id);
+  const load = useCallback(async () => {
+    try {
+      setCart(await fetchCart(getUser().id));
+      setError(null);
+    } catch (err) {
+      setError(errorMessage(err, 'Could not load your cart'));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isLoggedIn()) {
+      navigate('/login');
       return;
     }
-    setCartItems(items =>
-      items.map(item =>
-        item.id === id ? { ...item, quantity: newQuantity } : item
-      )
-    );
+    load();
+  }, [load, navigate]);
+
+  // Quantity changes are a cart-service call, not local state: it re-checks stock and can refuse.
+  const runAction = async (action) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setCart(await action());
+    } catch (err) {
+      setError(errorMessage(err, 'Could not update your cart'));
+      await load();
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const removeItem = (id) => {
-    setCartItems(items => items.filter(item => item.id !== id));
-  };
+  const changeQuantity = (productId, quantity) =>
+    runAction(() => updateCartItem(getUser().id, productId, quantity));
 
-  const getTotalAmount = () => {
-    return cartItems.reduce((total, item) => total + (item.price * item.quantity), 0);
-  };
+  const removeItem = (productId) =>
+    runAction(() => removeCartItem(getUser().id, productId));
 
-  const getTotalItems = () => {
-    return cartItems.reduce((total, item) => total + item.quantity, 0);
-  };
+  const emptyCart = () =>
+    runAction(async () => {
+      await clearCart(getUser().id);
+      return fetchCart(getUser().id);
+    });
 
-  if (cartItems.length === 0) {
+  if (loading) return <div className="loading">Loading your cart...</div>;
+
+  const items = cart?.items || [];
+
+  if (items.length === 0) {
     return (
       <div className="cart empty-cart">
         <div className="container">
           <h1>Shopping Cart</h1>
+          {error && <div className="error-message">{error}</div>}
           <p>Your cart is empty</p>
           <Link to="/products" className="btn btn-primary">
             Continue Shopping
@@ -63,50 +78,55 @@ const Cart = () => {
   return (
     <div className="cart">
       <div className="container">
-        <h1>Shopping Cart ({getTotalItems()} items)</h1>
-        
+        <h1>Shopping Cart ({cart.totalItems} items)</h1>
+
+        {error && <div className="error-message">{error}</div>}
+
         <div className="cart-content">
           <div className="cart-items">
-            {cartItems.map(item => (
-              <div key={item.id} className="cart-item">
-                <img src={item.imageUrl} alt={item.name} />
+            {items.map((item) => (
+              <div key={item.productId} className="cart-item">
+                {item.imageUrl && <img src={item.imageUrl} alt={item.productName} />}
                 <div className="item-info">
-                  <h3>{item.name}</h3>
-                  <p className="price">${item.price}</p>
+                  <h3>{item.productName}</h3>
+                  <p className="price">${Number(item.price).toFixed(2)}</p>
                 </div>
                 <div className="quantity-controls">
                   <button
-                    onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                    onClick={() => changeQuantity(item.productId, item.quantity - 1)}
                     className="btn btn-secondary"
+                    disabled={busy}
                   >
                     -
                   </button>
                   <span className="quantity">{item.quantity}</span>
                   <button
-                    onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                    onClick={() => changeQuantity(item.productId, item.quantity + 1)}
                     className="btn btn-secondary"
+                    disabled={busy}
                   >
                     +
                   </button>
                 </div>
                 <div className="item-total">
-                  ${(item.price * item.quantity).toFixed(2)}
+                  ${(Number(item.price) * item.quantity).toFixed(2)}
                 </div>
                 <button
-                  onClick={() => removeItem(item.id)}
+                  onClick={() => removeItem(item.productId)}
                   className="btn btn-danger remove-btn"
+                  disabled={busy}
                 >
                   Remove
                 </button>
               </div>
             ))}
           </div>
-          
+
           <div className="cart-summary">
             <h3>Order Summary</h3>
             <div className="summary-row">
               <span>Subtotal:</span>
-              <span>${getTotalAmount().toFixed(2)}</span>
+              <span>${Number(cart.totalAmount).toFixed(2)}</span>
             </div>
             <div className="summary-row">
               <span>Shipping:</span>
@@ -114,11 +134,14 @@ const Cart = () => {
             </div>
             <div className="summary-row total">
               <span>Total:</span>
-              <span>${getTotalAmount().toFixed(2)}</span>
+              <span>${Number(cart.totalAmount).toFixed(2)}</span>
             </div>
             <Link to="/checkout" className="btn btn-success checkout-btn">
               Proceed to Checkout
             </Link>
+            <button onClick={emptyCart} className="btn btn-secondary" disabled={busy}>
+              Clear Cart
+            </button>
           </div>
         </div>
       </div>

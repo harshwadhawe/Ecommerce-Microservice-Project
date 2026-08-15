@@ -1,22 +1,18 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { errorMessage, loginUser } from '../api';
+import { saveSession } from '../auth';
 import './Login.css';
 
 const Login = () => {
   const navigate = useNavigate();
-  const [formData, setFormData] = useState({
-    email: '',
-    password: ''
-  });
+  const [formData, setFormData] = useState({ email: '', password: '' });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleSubmit = async (e) => {
@@ -25,22 +21,11 @@ const Login = () => {
     setError('');
 
     try {
-      // Simulate login API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // For demo purposes, accept any email/password
-      if (formData.email && formData.password) {
-        // Store token (in a real app, this would come from the API)
-        localStorage.setItem('authToken', 'demo-token');
-        localStorage.setItem('userEmail', formData.email);
-        
-        // Navigate to home page
-        navigate('/');
-      } else {
-        setError('Please enter valid credentials');
-      }
+      const { token, user } = await loginUser(formData.email, formData.password);
+      saveSession(token, user);
+      navigate('/products');
     } catch (err) {
-      setError('Login failed. Please try again.');
+      setError(errorMessage(err, 'Login failed. Please try again.'));
     } finally {
       setLoading(false);
     }
@@ -51,9 +36,9 @@ const Login = () => {
       <div className="container">
         <div className="login-form-container">
           <h1>Login</h1>
-          
+
           {error && <div className="error-message">{error}</div>}
-          
+
           <form onSubmit={handleSubmit} className="login-form">
             <div className="form-group">
               <label className="form-label">Email</label>
@@ -66,7 +51,7 @@ const Login = () => {
                 required
               />
             </div>
-            
+
             <div className="form-group">
               <label className="form-label">Password</label>
               <input
@@ -78,7 +63,7 @@ const Login = () => {
                 required
               />
             </div>
-            
+
             <button
               type="submit"
               className="btn btn-primary login-btn"
@@ -87,7 +72,7 @@ const Login = () => {
               {loading ? 'Logging in...' : 'Login'}
             </button>
           </form>
-          
+
           <div className="login-footer">
             <p>Don't have an account? <Link to="/register">Register here</Link></p>
           </div>

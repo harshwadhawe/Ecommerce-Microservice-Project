@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { clearCart, errorMessage, fetchCart, processPayment } from '../api';
+import { getUser, isLoggedIn } from '../auth';
 import './Checkout.css';
 
 const Checkout = () => {
@@ -19,6 +21,24 @@ const Checkout = () => {
     cardholderName: ''
   });
   const [processing, setProcessing] = useState(false);
+  const [cart, setCart] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!isLoggedIn()) {
+      navigate('/login');
+      return;
+    }
+    fetchCart(getUser().id)
+      .then((loaded) => {
+        if (!loaded.items || loaded.items.length === 0) {
+          navigate('/cart');
+          return;
+        }
+        setCart(loaded);
+      })
+      .catch((err) => setError(errorMessage(err, 'Could not load your cart')));
+  }, [navigate]);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -32,19 +52,39 @@ const Checkout = () => {
     e.preventDefault();
     setProcessing(true);
     
+    // No order-service yet, so nothing persists an order: the reference sent to payment-service
+    // is generated here and echoed back on the receipt.
+    const orderReference = 'ORD-' + Date.now();
+
     try {
-      // Simulate order processing
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Navigate to order confirmation
+      const payment = await processPayment({
+        orderId: orderReference,
+        amount: cart.totalAmount,
+        paymentMethod: 'CARD',
+        cardNumber: formData.cardNumber.replace(/\s/g, ''),
+        cvv: formData.cvv,
+        expiryDate: formData.expiryDate,
+        cardholderName: formData.cardholderName
+      });
+
+      if (payment.status !== 'SUCCESS') {
+        setError(`Payment declined: ${payment.message}`);
+        return;
+      }
+
+      // The cart is only emptied once the money is taken.
+      await clearCart(getUser().id);
+
       navigate('/order-confirmation', {
         state: {
-          orderId: 'ORD-' + Date.now(),
-          total: 1699.97
+          orderId: payment.orderId,
+          transactionId: payment.transactionId,
+          total: cart.totalAmount,
+          status: payment.status
         }
       });
-    } catch (error) {
-      alert('Payment failed. Please try again.');
+    } catch (err) {
+      setError(errorMessage(err, 'Payment failed. Please try again.'));
     } finally {
       setProcessing(false);
     }
@@ -54,6 +94,8 @@ const Checkout = () => {
     <div className="checkout">
       <div className="container">
         <h1>Checkout</h1>
+
+        {error && <div className="error-message">{error}</div>}
         
         <div className="checkout-content">
           <form onSubmit={handleSubmit} className="checkout-form">
@@ -191,7 +233,7 @@ const Checkout = () => {
             <button
               type="submit"
               className="btn btn-success place-order-btn"
-              disabled={processing}
+              disabled={processing || !cart}
             >
               {processing ? 'Processing...' : 'Place Order'}
             </button>
@@ -199,21 +241,19 @@ const Checkout = () => {
 
           <div className="order-summary">
             <h3>Order Summary</h3>
-            <div className="summary-item">
-              <span>Laptop x1</span>
-              <span>$999.99</span>
-            </div>
-            <div className="summary-item">
-              <span>Smartphone x2</span>
-              <span>$1399.98</span>
-            </div>
+            {(cart?.items || []).map((item) => (
+              <div key={item.productId} className="summary-item">
+                <span>{item.productName} x{item.quantity}</span>
+                <span>${(Number(item.price) * item.quantity).toFixed(2)}</span>
+              </div>
+            ))}
             <div className="summary-item">
               <span>Shipping</span>
               <span>Free</span>
             </div>
             <div className="summary-item total">
               <span>Total</span>
-              <span>$1699.97</span>
+              <span>${Number(cart?.totalAmount || 0).toFixed(2)}</span>
             </div>
           </div>
         </div>

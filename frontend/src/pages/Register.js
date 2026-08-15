@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { errorMessage, registerUser } from '../api';
 import './Register.css';
 
 const Register = () => {
@@ -39,13 +40,12 @@ const Register = () => {
     }
 
     try {
-      // Simulate registration API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Navigate to login page
+      // confirmPassword is a UI-only field; user-service rejects unknown properties.
+      const { confirmPassword, ...registration } = formData;
+      await registerUser(registration);
       navigate('/login');
     } catch (err) {
-      setError('Registration failed. Please try again.');
+      setError(errorMessage(err, 'Registration failed. Please try again.'));
     } finally {
       setLoading(false);
     }

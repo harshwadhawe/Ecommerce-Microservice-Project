@@ -2,105 +2,109 @@
 
 [![CI](https://github.com/harshwadhawe/Ecommerce-Microservice-Project/actions/workflows/ci.yml/badge.svg)](https://github.com/harshwadhawe/Ecommerce-Microservice-Project/actions/workflows/ci.yml)
 
-A comprehensive e-commerce web application built with Spring Boot microservices architecture, React.js frontend, and containerized with Docker.
+An e-commerce web application built as Spring Boot microservices with a React frontend, running on
+Docker Compose or Kubernetes.
+
+The working flow is: **register → log in → browse the catalog → add to cart → pay**. Orders are not
+persisted, because order-service is not implemented — see [Status](#status).
 
 ## Architecture Overview
 
-This application follows a microservices architecture with the following components:
+Each service is an independent Maven project with its own datastore. There is no API gateway and no
+service registry: the frontend calls service ports directly, and services address each other by
+hostname from environment variables.
 
-### Backend Services (Java Spring Boot)
-- **User Service** (Port 8081) - User management and JWT authentication
-- **Product Service** (Port 8082) - Product catalog with MongoDB
-- **Cart Service** (Port 8083) - Shopping cart with Redis
-- **Order Service** (Port 8084) - Order management with MySQL
-- **Payment Service** (Port 8085) - Payment gateway simulator
+### Backend Services (Java Spring Boot 3.1.5, Java 17)
+| Service | Port | Store | State |
+|---------|------|-------|-------|
+| User Service | 8081 | MySQL | Registration, login, JWT issuing, profile |
+| Product Service | 8082 | MongoDB | Catalog CRUD, search, pagination, soft delete |
+| Cart Service | 8083 | Redis | Cart with stock checks; verifies JWTs and cart ownership |
+| Payment Service | 8085 | none | Simulator: ~90% success, random decline reasons |
+| Order Service | 8084 | MySQL | **Not implemented** — only an empty `@SpringBootApplication` |
 
 ### Frontend
-- **React.js Application** (Port 3000) - Responsive user interface
+- **React 18 + React Router** (Port 3000) — calls the real services; JWT kept in localStorage
 
 ### Databases
-- **MySQL** - User and Order data
-- **MongoDB** - Product catalog
-- **Redis** - Shopping cart and session management
+- **MySQL** — users (and orders, once order-service exists)
+- **MongoDB** — product catalog
+- **Redis** — carts, keyed `cart:{userId}` with a 24h TTL
+
+## Status
+
+| Area | State |
+|------|-------|
+| Register / login / JWT auth | Working, 27 tests |
+| Product catalog + search | Working, 20 tests |
+| Cart with stock limits + ownership | Working, 41 tests |
+| Payment simulation | Working, 7 tests |
+| Frontend shopping flow | Working, 6 tests |
+| End-to-end API suite | 46 checks, green on compose and Kubernetes |
+| CI on push | Unit, frontend, and e2e jobs |
+| **Orders / order history** | **Not implemented** |
 
 ## Quick Start
 
 ### Prerequisites
-- Docker and Docker Compose
-- Java 17 (for local development)
-- Node.js 18+ (for frontend development)
-- Maven 3.8+ (for building services)
+
+- **Docker** — enough on its own; every image compiles itself in a multi-stage build
+- **jq** — for `test-e2e.sh` and `seed.sh`
+- Java 17 and Maven 3.8+ — only to run services directly on the host
+- Node.js 18+ — only for the frontend dev server
 
 ### Using Docker Compose (Recommended)
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd SpringBoot
-   ```
+```bash
+git clone https://github.com/harshwadhawe/Ecommerce-Microservice-Project.git
+cd Ecommerce-Microservice-Project
 
-2. **Build all services**
-   ```bash
-   # Build backend services
-   cd backend/user-service && mvn clean package -DskipTests
-   cd ../product-service && mvn clean package -DskipTests
-   cd ../cart-service && mvn clean package -DskipTests
-   cd ../order-service && mvn clean package -DskipTests
-   cd ../payment-service && mvn clean package -DskipTests
-   cd ../../
-   
-   # Build frontend
-   cd frontend && npm install && npm run build
-   cd ../
-   ```
+docker-compose up -d --build   # images build from source; no prior mvn package needed
+./seed.sh                      # demo catalog, users, and one filled cart
+```
 
-3. **Start all services**
-   ```bash
-   docker-compose up -d
-   ```
+Then open **http://localhost:3000** and log in as `alice@example.com` / `password123`.
 
-4. **Access the application**
-   - Frontend: http://localhost:3000
-   - User Service: http://localhost:8081
-   - Product Service: http://localhost:8082
-   - Cart Service: http://localhost:8083
-   - Order Service: http://localhost:8084
-   - Payment Service: http://localhost:8085
+Services listen on 8081 (user), 8082 (product), 8083 (cart), 8084 (order, empty) and 8085 (payment).
+
+First build compiles five Spring Boot apps and takes a few minutes; later builds are cached.
 
 ## Local Development
 
 ### Backend Services
 
-Each service can be run independently:
+Start the databases in Docker, then run whichever services you are working on directly on the host.
 
 ```bash
-# User Service
-cd backend/user-service
-mvn spring-boot:run
+docker-compose up -d mysql mongodb redis
 
-# Product Service
-cd backend/product-service
-mvn spring-boot:run
+export JAVA_HOME=$(/usr/libexec/java_home -v 17)   # macOS; Maven needs 17, not the system default
 
-# Cart Service
-cd backend/cart-service
-mvn spring-boot:run
-
-# Order Service
-cd backend/order-service
-mvn spring-boot:run
-
-# Payment Service
-cd backend/payment-service
-mvn spring-boot:run
+# -f avoids relative `cd` chains; each line is its own terminal
+mvn -f backend/user-service/pom.xml    spring-boot:run   # :8081  needs mysql
+mvn -f backend/product-service/pom.xml spring-boot:run   # :8082  needs mongodb
+mvn -f backend/cart-service/pom.xml    spring-boot:run   # :8083  needs redis + product-service
+mvn -f backend/payment-service/pom.xml spring-boot:run   # :8085  no dependencies
+mvn -f backend/order-service/pom.xml   spring-boot:run   # :8084  starts, serves nothing
 ```
+
+Check they are up with `curl localhost:8081/actuator/health`.
 
 ### Frontend
 ```bash
 cd frontend
 npm install
-npm start
+npm start        # dev server on :3000, talks to the services on 8081-8085
+npm test         # jest/RTL
 ```
+
+The pages call the real services. Service URLs come from `REACT_APP_*_SERVICE_URL`, defaulting to
+`http://localhost:<port>`, and are baked in at build time — rebuild the image to change them.
+
+The shopping flow: register → login (JWT stored in localStorage) → browse the live catalog →
+add to cart (cart-service checks stock) → checkout (payment-service charges, cart is emptied on
+success). **There is no order-service**, so nothing persists an order: the confirmation screen shows
+the payment transaction id, and there is no order history.
 
 ## Database Setup
 
@@ -119,6 +123,34 @@ npm start
 ### Redis (Cart Service)
 - Host: localhost:6379
 - No authentication required
+
+## Seed Data
+
+`./seed.sh` fills an empty environment with a demo catalog, users, and one populated cart. Re-running
+is safe: products already present by name are skipped and existing emails are left alone.
+
+```bash
+./seed.sh                # localhost (docker-compose or the k8s cluster)
+HOST=1.2.3.4 ./seed.sh
+```
+
+**13 products** across Electronics, Audio, Home and Furniture, with stock levels chosen to exercise
+the UI: `Webcam 1080p` is out of stock (Add to Cart disabled) and `Desk Lamp` has 2 left, so asking
+for more triggers cart-service's stock rejection.
+
+**4 users**, all with password `password123`:
+
+| Email | Name |
+|-------|------|
+| alice@example.com | Alice Nguyen |
+| bob@example.com | Bob Martins |
+| carol@example.com | Carol Silva |
+| dave@example.com | Dave Okafor |
+
+Alice starts with a Laptop and a Wireless Mouse in her cart, so the header badge and cart page have
+something to show on first login.
+
+Requires `jq`, and the user, product and cart services to be running.
 
 ## API Documentation
 
@@ -151,10 +183,17 @@ cart).
 - `DELETE /api/cart/{userId}` - Clear cart
 
 ### Order Service (8084)
+
+**Not implemented.** The service starts and answers nothing — no controller, entity or repository
+exists. These are the endpoints it is intended to expose:
+
 - `POST /api/orders` - Create new order
 - `GET /api/orders/{userId}` - Get user's orders
 - `GET /api/orders/{orderId}` - Get order by ID
 - `PUT /api/orders/{orderId}/status` - Update order status
+
+Until they exist, checkout charges payment-service with a client-generated reference and shows the
+transaction id; nothing is stored.
 
 ### Payment Service (8085)
 - `POST /api/payment/process` - Process payment
@@ -279,9 +318,66 @@ instead of failing fast, and dumps the last 100 lines of every service log when 
 
 - **Repository queries.** `ProductRepository`'s regex `@Query` methods are only exercised through
   the e2e script. Testcontainers-backed `@DataMongoTest` would verify them properly.
-- **Frontend.** The React pages render hardcoded fixtures and make no API calls, so UI tests would
-  assert against mock data. Worth writing once the pages talk to the services.
+- **Frontend component tests.** `src/api.test.js` covers error extraction and session handling, but
+  no test renders a page. Worth adding once the UI stops changing shape.
 - **Order flow.** Blocked on order-service.
+
+## Kubernetes (local)
+
+Runs the frontend, the four working services and their databases on Docker Desktop's built-in
+cluster. No Helm, no kind, no extra tooling — plain manifests in `k8s/`.
+
+```bash
+# 1. Enable the cluster: Docker Desktop -> Settings -> Kubernetes -> Enable (one time)
+kubectl get nodes                    # confirm it is up
+
+# 2. Build the images -- note the quotes, zsh eats an unquoted :local
+for s in user-service product-service cart-service payment-service; do
+  docker build -t "ecommerce/${s}:local" "backend/${s}"
+done
+docker build -t "ecommerce/frontend:local" frontend
+
+# 3. Deploy
+kubectl apply -f k8s/
+
+# 4. Watch it come up (databases first, then services)
+kubectl get pods -w
+
+# 5. Same ports as docker-compose, so both scripts work unchanged
+./seed.sh
+./test-e2e.sh
+```
+
+Services are `type: LoadBalancer`, which Docker Desktop maps onto localhost — so 3000 and
+8081-8085 behave exactly as they do under compose. Stop compose first or the ports collide.
+
+Verified on Docker Desktop's cluster (kind mode, Kubernetes 1.36.1): all 8 pods Ready, `test-e2e.sh`
+46/46 green against the cluster, and a `kubectl rollout restart` served 60/60 requests with no
+failures.
+
+Useful while poking at it:
+
+```bash
+kubectl logs -f deploy/cart-service
+kubectl describe pod -l app=cart-service     # why a pod is not ready
+kubectl rollout restart deploy/cart-service  # rolling restart, zero dropped requests
+kubectl delete pod -l app=cart-service       # watch it come back on its own
+kubectl delete -f k8s/                       # tear down (PVCs survive; delete those separately)
+```
+
+Notes:
+
+- **`enableServiceLinks: false` is required, not cosmetic.** Kubernetes injects Docker-link-era
+  variables for every Service — `REDIS_PORT` becomes `tcp://10.96.x.x:6379`, which collides with
+  this app's own `${REDIS_PORT}` / `${MYSQL_PORT}` / `${MONGODB_PORT}` placeholders and kills
+  startup with a `NumberFormatException`. Removing that line breaks cart, user and product services.
+- **order-service is not deployed** — it has no endpoints, so a pod would only consume memory.
+- **The frontend is deployed** (`k8s/frontend.yaml`) on port 3000 and talks to the real services.
+- **Secrets are dev values** committed in `k8s/services.yaml`, matching docker-compose. `jwt-secret`
+  must stay identical between user-service and cart-service.
+- **Databases run in-cluster with PVCs** for MySQL and MongoDB. Redis has no volume on purpose —
+  carts are a 24h-TTL cache. For anything beyond local use, point at managed databases and delete
+  `k8s/databases.yaml`.
 
 ## AWS Deployment
 
@@ -315,34 +411,50 @@ instead of failing fast, and dumps the last 100 lines of every service log when 
    docker push {account-id}.dkr.ecr.{region}.amazonaws.com/ecommerce/user-service:latest
    ```
 
-3. **Deploy using ECS or Elastic Beanstalk**
-   - Use the provided `docker-compose.yml` as a reference
-   - Configure environment variables for AWS resources
-   - Set up load balancers and auto-scaling groups
+3. **Deploy to EKS or ECS**
+   - The manifests in `k8s/` are the closest starting point: swap `image:` for ECR references,
+     delete `k8s/databases.yaml` in favour of RDS/DocumentDB/ElastiCache, and replace the
+     `LoadBalancer` services with an Ingress.
+   - Move `ecommerce-secrets` out of the manifest into Secrets Manager or SSM.
 
-## Security Features
+None of this AWS section has been executed — unlike the local Kubernetes path, it is untested.
 
-- JWT-based authentication
-- Password encryption using BCrypt
-- CORS configuration
-- Input validation and sanitization
-- SQL injection prevention
-- XSS protection
+## Security
 
-## Performance Optimization
+What is actually enforced:
 
-- Redis caching for cart data
-- Database connection pooling
-- Pagination for large datasets
-- Lazy loading in React components
-- Docker multi-stage builds
+- **BCrypt password hashing**; responses never include the hash.
+- **JWT authentication.** user-service signs tokens (HS256, 24h) carrying the numeric user id.
+- **Local token verification in cart-service** using the shared `JWT_SECRET` — no callback to
+  user-service, so cart auth survives a user-service outage.
+- **Cart ownership.** `@PreAuthorize("#userId == authentication.name")` on every cart endpoint:
+  no token → 401, another user's cart → 403.
+- **Bean Validation** on every request body, returning field-level 400s.
+- **Failed logins return 401** with a message that does not reveal whether the account exists.
+- **Parameterized queries** through Spring Data (JPA and MongoDB), so no hand-built SQL.
+
+Known limitations, deliberately not hidden:
+
+- product-service and payment-service are **unauthenticated** — anyone can create or delete products.
+- CORS allows any origin (`allowedOriginPatterns("*")`), appropriate for local development only.
+- Secrets are committed as dev defaults in `docker-compose.yml` and `k8s/services.yaml`.
+- Card details are posted to the payment simulator in plaintext JSON; it is not a real gateway.
+
+## Performance
+
+- Redis-backed carts with a 24h TTL, refreshed on read
+- HikariCP connection pooling (Spring Boot default) for MySQL
+- Server-side pagination on every catalog listing
+- Timeouts on cart → product calls (2s connect, 3s response) so one slow service cannot pin threads
+- Multi-stage Docker builds producing JRE-only images that run as a non-root user
 
 ## Monitoring and Logging
 
-- Spring Boot Actuator endpoints
-- Structured logging with Logback
-- Health check endpoints
-- Metrics collection ready for Prometheus
+- **Spring Boot Actuator** on all five services: `/actuator/health` and `/actuator/info`
+- Kubernetes startup, readiness and liveness probes read those health endpoints
+- Logback at the Spring Boot defaults (plain text, not structured JSON)
+- No metrics registry is configured — Prometheus scraping would need `micrometer-registry-prometheus`
+  plus exposing the `prometheus` endpoint
 
 ## Contributing
 
@@ -354,16 +466,26 @@ instead of failing fast, and dumps the last 100 lines of every service log when 
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+No license file has been added yet, so default copyright applies.
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Port conflicts**: Ensure ports 3000, 3306, 6379, 8081-8085, 27017 are available
-2. **Database connection**: Check database services are running and accessible
-3. **Memory issues**: Increase Docker memory allocation if services fail to start
-4. **Network issues**: Ensure Docker networks are properly configured
+1. **Port conflicts** — ports 3000, 3306, 6379, 8081-8085 and 27017 must be free. Compose and the
+   Kubernetes cluster both bind the same ports, so run one at a time.
+2. **Every cart request returns 401** — `JWT_SECRET` differs between user-service and cart-service.
+   They must match exactly; cart-service verifies the token locally.
+3. **Cart appears to reset on every request** — the Redis `ObjectMapper` must keep
+   `FAIL_ON_UNKNOWN_PROPERTIES` disabled. `Cart` serializes computed getters it cannot read back,
+   and the failure is swallowed as "empty cart". `CartSerializationTest` guards this.
+4. **Pods crash with `NumberFormatException: For input string: "tcp://10.96..."`** — a pod is missing
+   `enableServiceLinks: false`. Kubernetes injects `REDIS_PORT`/`MYSQL_PORT` variables that collide
+   with the app's own placeholders.
+5. **Images tagged `<service>ocal:latest`** — zsh expanded an unquoted `$s:local` (`:l` is its
+   lowercase modifier). Quote the tag: `docker build -t "ecommerce/${s}:local"`.
+6. **`mvn` fails on Java version** — `export JAVA_HOME=$(/usr/libexec/java_home -v 17)`.
+7. **Memory** — five JVMs plus three databases need roughly 4GB of Docker memory.
 
 ### Logs
 ```bash
@@ -376,4 +498,5 @@ docker-compose logs -f
 
 ## Support
 
-For questions or issues, please create an issue in the GitHub repository or contact the development team.
+Open an issue at
+[github.com/harshwadhawe/Ecommerce-Microservice-Project/issues](https://github.com/harshwadhawe/Ecommerce-Microservice-Project/issues).

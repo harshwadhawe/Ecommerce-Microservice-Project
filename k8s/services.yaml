@@ -1,0 +1,247 @@
+# The four working services. order-service is deliberately absent: it has no endpoints yet, so a
+# pod for it would only burn memory.
+#
+# Services are type LoadBalancer because Docker Desktop maps those straight onto localhost, which
+# means the same ports as docker-compose and ./test-e2e.sh works unchanged against the cluster.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ecommerce-secrets
+type: Opaque
+stringData:
+  # Dev values, matching docker-compose. Replace before this leaves a laptop -- and note that
+  # user-service and cart-service must agree on jwt-secret or every cart request returns 401.
+  jwt-secret: mySecretKey123456789012345678901234567890
+  mysql-password: password
+  mysql-root-password: rootpassword
+  mongodb-password: password
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+    spec:
+      # Kubernetes otherwise injects Docker-link-era vars for every Service -- REDIS_PORT becomes
+      # "tcp://10.96.x.x:6379", which collides with this app's own ${REDIS_PORT}/${MYSQL_PORT}/
+      # ${MONGODB_PORT} placeholders and fails startup on a NumberFormatException.
+      enableServiceLinks: false
+      containers:
+        - name: user-service
+          image: ecommerce/user-service:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+          env:
+            - name: MYSQL_HOST
+              value: mysql
+            - name: MYSQL_USERNAME
+              value: ecommerce
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: ecommerce-secrets, key: mysql-password}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef: {name: ecommerce-secrets, key: jwt-secret}
+          # startupProbe absorbs JVM boot and the wait for MySQL; the other two only take over
+          # once the app is actually up, so a slow start is not mistaken for a hung process.
+          startupProbe:
+            httpGet: {path: /actuator/health, port: 8081}
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /actuator/health, port: 8081}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /actuator/health, port: 8081}
+            periodSeconds: 20
+          resources:
+            requests: {memory: 384Mi, cpu: 100m}
+            limits: {memory: 768Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: user-service
+  ports:
+    - port: 8081
+      targetPort: 8081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: product-service
+  template:
+    metadata:
+      labels:
+        app: product-service
+    spec:
+      # Kubernetes otherwise injects Docker-link-era vars for every Service -- REDIS_PORT becomes
+      # "tcp://10.96.x.x:6379", which collides with this app's own ${REDIS_PORT}/${MYSQL_PORT}/
+      # ${MONGODB_PORT} placeholders and fails startup on a NumberFormatException.
+      enableServiceLinks: false
+      containers:
+        - name: product-service
+          image: ecommerce/product-service:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8082
+          env:
+            - name: MONGODB_HOST
+              value: mongodb
+            - name: MONGODB_USERNAME
+              value: admin
+            - name: MONGODB_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: ecommerce-secrets, key: mongodb-password}
+          startupProbe:
+            httpGet: {path: /actuator/health, port: 8082}
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /actuator/health, port: 8082}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /actuator/health, port: 8082}
+            periodSeconds: 20
+          resources:
+            requests: {memory: 384Mi, cpu: 100m}
+            limits: {memory: 768Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: product-service
+  ports:
+    - port: 8082
+      targetPort: 8082
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cart-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cart-service
+  template:
+    metadata:
+      labels:
+        app: cart-service
+    spec:
+      # Kubernetes otherwise injects Docker-link-era vars for every Service -- REDIS_PORT becomes
+      # "tcp://10.96.x.x:6379", which collides with this app's own ${REDIS_PORT}/${MYSQL_PORT}/
+      # ${MONGODB_PORT} placeholders and fails startup on a NumberFormatException.
+      enableServiceLinks: false
+      containers:
+        - name: cart-service
+          image: ecommerce/cart-service:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8083
+          env:
+            - name: REDIS_HOST
+              value: redis
+            - name: PRODUCT_SERVICE_URL
+              value: http://product-service:8082
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef: {name: ecommerce-secrets, key: jwt-secret}
+          startupProbe:
+            httpGet: {path: /actuator/health, port: 8083}
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /actuator/health, port: 8083}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /actuator/health, port: 8083}
+            periodSeconds: 20
+          resources:
+            requests: {memory: 384Mi, cpu: 100m}
+            limits: {memory: 768Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cart-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: cart-service
+  ports:
+    - port: 8083
+      targetPort: 8083
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-service
+  template:
+    metadata:
+      labels:
+        app: payment-service
+    spec:
+      # Kubernetes otherwise injects Docker-link-era vars for every Service -- REDIS_PORT becomes
+      # "tcp://10.96.x.x:6379", which collides with this app's own ${REDIS_PORT}/${MYSQL_PORT}/
+      # ${MONGODB_PORT} placeholders and fails startup on a NumberFormatException.
+      enableServiceLinks: false
+      containers:
+        - name: payment-service
+          image: ecommerce/payment-service:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8085
+          startupProbe:
+            httpGet: {path: /actuator/health, port: 8085}
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /actuator/health, port: 8085}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /actuator/health, port: 8085}
+            periodSeconds: 20
+          resources:
+            requests: {memory: 256Mi, cpu: 100m}
+            limits: {memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: payment-service
+  ports:
+    - port: 8085
+      targetPort: 8085

@@ -1,8 +1,20 @@
-FROM openjdk:17-jdk-slim
+# Self-contained build: no prior `mvn package` needed, so the image cannot silently ship
+# whatever jar happened to be in target/.
+FROM maven:3.9-eclipse-temurin-17 AS build
+WORKDIR /build
+COPY pom.xml .
+RUN mvn -B dependency:go-offline
+COPY src ./src
+RUN mvn -B clean package -DskipTests
 
+FROM eclipse-temurin:17-jre
 WORKDIR /app
 
-COPY target/cart-service-1.0.0.jar app.jar
+# Unprivileged: a container escape should not land on root.
+RUN useradd --system --uid 10001 spring
+USER spring
+
+COPY --from=build /build/target/cart-service-1.0.0.jar app.jar
 
 EXPOSE 8083
 
