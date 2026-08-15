@@ -57,6 +57,7 @@ const Header = () => {
             </Link>
             {isLoggedIn() && user ? (
               <>
+                <Link to="/orders" className="nav-link">Orders</Link>
                 <span className="nav-link">Hi, {user.firstName}</span>
                 <button type="button" onClick={handleLogout} className="nav-link logout-btn">
                   Logout

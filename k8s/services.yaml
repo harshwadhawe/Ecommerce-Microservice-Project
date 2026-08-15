@@ -1,5 +1,4 @@
-# The four working services. order-service is deliberately absent: it has no endpoints yet, so a
-# pod for it would only burn memory.
+# All five services.
 #
 # Services are type LoadBalancer because Docker Desktop maps those straight onto localhost, which
 # means the same ports as docker-compose and ./test-e2e.sh works unchanged against the cluster.
@@ -245,3 +244,65 @@ spec:
   ports:
     - port: 8085
       targetPort: 8085
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: order-service
+          image: ecommerce/order-service:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8084
+          env:
+            - name: MYSQL_HOST
+              value: mysql
+            - name: MYSQL_USERNAME
+              value: ecommerce
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: ecommerce-secrets, key: mysql-password}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef: {name: ecommerce-secrets, key: jwt-secret}
+            - name: CART_SERVICE_URL
+              value: http://cart-service:8083
+            - name: PAYMENT_SERVICE_URL
+              value: http://payment-service:8085
+          startupProbe:
+            httpGet: {path: /actuator/health, port: 8084}
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /actuator/health, port: 8084}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /actuator/health, port: 8084}
+            periodSeconds: 20
+          resources:
+            requests: {memory: 384Mi, cpu: 100m}
+            limits: {memory: 768Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: order-service
+  ports:
+    - port: 8084
+      targetPort: 8084

@@ -117,4 +117,40 @@ else
 fi
 
 echo
+echo "Order history for bob@example.com"
+ORDER_URL="http://$HOST:8084"
+login=$(curl -sS -m 10 -X POST "$USER_URL/api/users/login" -H 'Content-Type: application/json' \
+    -d "{\"email\":\"bob@example.com\",\"password\":\"$PASSWORD\"}")
+token=$(jq -r '.token // empty' <<<"$login")
+user_id=$(jq -r '.user.id // empty' <<<"$login")
+
+if [ -z "$token" ] || ! curl -sS -m 5 -o /dev/null "$ORDER_URL/api/orders" 2>/dev/null; then
+    echo "  order-service unavailable, skipping"
+else
+    existing=$(curl -sS -m 10 "$ORDER_URL/api/orders" -H "Authorization: Bearer $token" | jq -r 'length // 0')
+    if [ "$existing" -gt 0 ]; then
+        echo "  already has $existing order(s), leaving them alone"
+    else
+        catalog=$(curl -sS -m 10 "$PRODUCT_URL/api/products/active?page=0&size=200")
+        pid=$(jq -r '.content[] | select(.name == "Headphones") | .id' <<<"$catalog" | head -1)
+        if [ -n "$pid" ]; then
+            curl -sS -m 10 -o /dev/null -X POST "$CART_URL/api/cart/$user_id/items" \
+                -H 'Content-Type: application/json' -H "Authorization: Bearer $token" \
+                -d "{\"productId\":\"$pid\",\"quantity\":1}"
+            # The payment simulator declines about one attempt in ten. A declined order is a valid
+            # outcome -- it stays in the history as PAYMENT_FAILED and the cart is left intact --
+            # so retry a couple of times to make a PAID order the usual result.
+            for attempt in 1 2 3; do
+                status=$(curl -sS -m 20 -X POST "$ORDER_URL/api/orders" \
+                    -H 'Content-Type: application/json' -H "Authorization: Bearer $token" \
+                    -d '{"recipientName":"Bob Martins","address":"48 Pine Avenue","city":"Austin","country":"USA","postalCode":"73301","cardholderName":"Bob Martins","cardNumber":"4111111111111111","expiryDate":"12/30","cvv":"123"}' \
+                    | jq -r '.status // .error')
+                [ "$status" = "PAID" ] && break
+            done
+            echo "  placed one order: $status"
+        fi
+    fi
+fi
+
+echo
 echo "Done. Log in at http://$HOST:3000 as any seeded user with password $PASSWORD"

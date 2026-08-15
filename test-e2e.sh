@@ -14,6 +14,7 @@ HOST="${HOST:-localhost}"
 USER_URL="http://$HOST:8081"
 PRODUCT_URL="http://$HOST:8082"
 CART_URL="http://$HOST:8083"
+ORDER_URL="http://$HOST:8084"
 PAYMENT_URL="http://$HOST:8085"
 
 passed=0
@@ -64,6 +65,7 @@ echo "Checking services..."
 require "$USER_URL/api/users"          "user-service"    "user-service"
 require "$PRODUCT_URL/api/products"    "product-service" "product-service"
 require "$CART_URL/api/cart/preflight" "cart-service"    "cart-service"
+require "$ORDER_URL/api/orders"        "order-service"   "order-service"
 require "$PAYMENT_URL/api/payment"     "payment-service" "payment-service"
 
 TOKEN=""
@@ -215,7 +217,52 @@ check "payment without card details returns 400" "400" "$STATUS"
 
 echo
 echo "Orders"
-echo "  skip  order-service is not implemented; checkout cannot be tested end to end"
+ORDER_BODY='{"recipientName":"E2E Test","address":"1 Main St","city":"Chicago","country":"USA","postalCode":"60601","cardholderName":"E2E Test","cardNumber":"4111111111111111","expiryDate":"12/30","cvv":"123"}'
+
+call POST "$ORDER_URL/api/orders" "$ORDER_BODY"
+check "empty cart cannot be ordered" "400" "$STATUS"
+
+call POST "$CART_URL/api/cart/$CART_USER/items" "{\"productId\":\"$PRODUCT_ID\",\"quantity\":2}"
+
+# The payment simulator declines ~10% of the time; both outcomes are correct, so accept either and
+# assert what must hold in each case.
+call POST "$ORDER_URL/api/orders" "$ORDER_BODY"
+if [ "$STATUS" = "201" ]; then
+    check "order is created" "201" "$STATUS"
+    check "order is paid" "PAID" "$(echo "$BODY" | jq -r '.status')"
+    check "order snapshots the cart" "2" "$(echo "$BODY" | jq -r '.items[0].quantity')"
+    check "order total matches the cart" "1999.98" "$(echo "$BODY" | jq -r '.totalAmount')"
+    check "order records the transaction" "36" "$(echo "$BODY" | jq -r '.paymentTransactionId | length')"
+    check "order items do not recurse" "null" "$(echo "$BODY" | jq -r '.items[0].order')"
+    ORDER_ID=$(echo "$BODY" | jq -r '.id')
+
+    call GET "$CART_URL/api/cart/$CART_USER"
+    check "cart is emptied after payment" "0" "$(echo "$BODY" | jq -r '.totalItems')"
+
+    call GET "$ORDER_URL/api/orders/$ORDER_ID"
+    check "order can be fetched by id" "200" "$STATUS"
+
+    call GET "$ORDER_URL/api/orders"
+    check "order appears in history" "true" \
+        "$(echo "$BODY" | jq --arg id "$ORDER_ID" 'any(.[]; .id == ($id | tonumber))')"
+
+    call PUT "$ORDER_URL/api/orders/$ORDER_ID/status" '{"status":"SHIPPED"}'
+    check "status can be advanced" "SHIPPED" "$(echo "$BODY" | jq -r '.status')"
+
+    SAVED_TOKEN="$TOKEN"
+    TOKEN=""
+    call GET "$ORDER_URL/api/orders/$ORDER_ID"
+    check "orders require a token" "401" "$STATUS"
+    TOKEN="$SAVED_TOKEN"
+else
+    check "declined payment returns 402" "402" "$STATUS"
+    check "declined order is recorded" "PAYMENT_FAILED" "$(echo "$BODY" | jq -r '.status')"
+    call GET "$CART_URL/api/cart/$CART_USER"
+    check "cart survives a declined payment" "2" "$(echo "$BODY" | jq -r '.totalItems')"
+fi
+
+call GET "$ORDER_URL/api/orders/999999"
+check "unknown order returns 404" "404" "$STATUS"
 
 echo
 echo "Cleanup"

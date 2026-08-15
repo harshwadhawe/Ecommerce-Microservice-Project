@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { clearCart, errorMessage, fetchCart, processPayment } from '../api';
+import { errorMessage, fetchCart, placeOrder } from '../api';
 import { getUser, isLoggedIn } from '../auth';
 import './Checkout.css';
 
@@ -52,38 +52,25 @@ const Checkout = () => {
     e.preventDefault();
     setProcessing(true);
     
-    // No order-service yet, so nothing persists an order: the reference sent to payment-service
-    // is generated here and echoed back on the receipt.
-    const orderReference = 'ORD-' + Date.now();
-
     try {
-      const payment = await processPayment({
-        orderId: orderReference,
-        amount: cart.totalAmount,
-        paymentMethod: 'CARD',
+      // order-service reads the cart itself, charges payment-service, records the order and
+      // empties the cart -- the browser is not trusted with the amount.
+      const order = await placeOrder({
+        recipientName: `${formData.firstName} ${formData.lastName}`.trim(),
+        address: formData.address,
+        city: formData.city,
+        country: formData.country,
+        postalCode: formData.postalCode,
+        cardholderName: formData.cardholderName,
         cardNumber: formData.cardNumber.replace(/\s/g, ''),
-        cvv: formData.cvv,
         expiryDate: formData.expiryDate,
-        cardholderName: formData.cardholderName
+        cvv: formData.cvv
       });
 
-      if (payment.status !== 'SUCCESS') {
-        setError(`Payment declined: ${payment.message}`);
-        return;
-      }
-
-      // The cart is only emptied once the money is taken.
-      await clearCart(getUser().id);
-
-      navigate('/order-confirmation', {
-        state: {
-          orderId: payment.orderId,
-          transactionId: payment.transactionId,
-          total: cart.totalAmount,
-          status: payment.status
-        }
-      });
+      navigate(`/order-confirmation/${order.id}`);
     } catch (err) {
+      // 402 means the card was declined: the order exists, marked PAYMENT_FAILED, and the cart is
+      // still intact so the shopper can try again.
       setError(errorMessage(err, 'Payment failed. Please try again.'));
     } finally {
       setProcessing(false);

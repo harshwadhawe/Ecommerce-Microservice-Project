@@ -105,6 +105,7 @@ services:
       - MYSQL_DATABASE=ecommerce
       - MYSQL_USERNAME=ecommerce
       - MYSQL_PASSWORD=password
+      - JWT_SECRET=mySecretKey123456789012345678901234567890
       - USER_SERVICE_URL=http://user-service:8081
       - PRODUCT_SERVICE_URL=http://product-service:8082
       - CART_SERVICE_URL=http://cart-service:8083

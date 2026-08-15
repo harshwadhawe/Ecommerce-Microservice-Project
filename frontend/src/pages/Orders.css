@@ -1,0 +1,94 @@
+.orders {
+  padding: 2rem 0;
+}
+
+.orders h1 {
+  margin-bottom: 1.5rem;
+}
+
+.empty-orders {
+  text-align: center;
+  padding: 3rem 0;
+}
+
+.order-card {
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+  background: #fff;
+}
+
+.order-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  border-bottom: 1px solid #f0f0f0;
+  padding-bottom: 0.75rem;
+}
+
+.order-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.order-date {
+  margin: 0.25rem 0 0;
+  color: #777;
+  font-size: 0.85rem;
+}
+
+.order-header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.order-total {
+  font-weight: 700;
+}
+
+.status {
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: #eee;
+  color: #444;
+}
+
+.status-paid {
+  background: #e6f4ea;
+  color: #1e7e34;
+}
+
+.status-payment_failed {
+  background: #fdecea;
+  color: #c0392b;
+}
+
+.status-shipped,
+.status-delivered {
+  background: #e8f0fe;
+  color: #1a5fb4;
+}
+
+.order-lines {
+  padding: 0.75rem 0;
+}
+
+.order-line {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.25rem 0;
+  font-size: 0.95rem;
+}
+
+.payment-message {
+  color: #c0392b;
+  font-size: 0.9rem;
+  margin: 0 0 0.75rem;
+}

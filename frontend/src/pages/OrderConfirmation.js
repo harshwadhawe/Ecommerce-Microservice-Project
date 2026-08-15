@@ -1,28 +1,38 @@
-import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { errorMessage, fetchOrder } from '../api';
 import './OrderConfirmation.css';
 
 const OrderConfirmation = () => {
-  const location = useLocation();
-  const { orderId, transactionId, total, status } = location.state || {};
+  // The order id is in the URL rather than in router state, so a refresh or a shared link still
+  // resolves -- order-service is the source of truth now, not whatever the previous page passed.
+  const { orderId } = useParams();
+  const [order, setOrder] = useState(null);
+  const [error, setError] = useState('');
 
-  // Reached by typing the URL or refreshing: there is no order to look up, because no
-  // order-service stores one.
-  if (!orderId) {
+  useEffect(() => {
+    fetchOrder(orderId)
+      .then(setOrder)
+      .catch((err) => setError(errorMessage(err, 'Could not load this order')));
+  }, [orderId]);
+
+  if (error) {
     return (
       <div className="order-confirmation">
         <div className="container">
           <div className="confirmation-content">
-            <h1>No recent order</h1>
-            <p>Order receipts are only shown right after checkout.</p>
+            <h1>Order unavailable</h1>
+            <div className="error-message">{error}</div>
             <div className="actions">
-              <Link to="/products" className="btn btn-primary">Continue Shopping</Link>
+              <Link to="/orders" className="btn btn-primary">View your orders</Link>
             </div>
           </div>
         </div>
       </div>
     );
   }
+
+  if (!order) return <div className="loading">Loading your order...</div>;
 
   return (
     <div className="order-confirmation">
@@ -31,46 +41,53 @@ const OrderConfirmation = () => {
           <div className="success-icon">
             <span>✓</span>
           </div>
-          
+
           <h1>Order Confirmed!</h1>
-          
+
           <div className="order-details">
             <p>Thank you for your order. Your order has been successfully placed.</p>
-            
+
             <div className="order-info">
               <div className="info-item">
-                <span className="label">Order ID:</span>
-                <span className="value">{orderId}</span>
+                <span className="label">Order Number:</span>
+                <span className="value">{order.orderNumber}</span>
               </div>
               <div className="info-item">
                 <span className="label">Transaction ID:</span>
-                <span className="value">{transactionId}</span>
+                <span className="value">{order.paymentTransactionId}</span>
               </div>
               <div className="info-item">
                 <span className="label">Total Amount:</span>
-                <span className="value">${Number(total || 0).toFixed(2)}</span>
+                <span className="value">${Number(order.totalAmount).toFixed(2)}</span>
               </div>
               <div className="info-item">
-                <span className="label">Payment:</span>
-                <span className="value">{status}</span>
+                <span className="label">Status:</span>
+                <span className="value">{order.status}</span>
+              </div>
+              <div className="info-item">
+                <span className="label">Ships to:</span>
+                <span className="value">
+                  {order.recipientName}, {order.address}, {order.city} {order.postalCode}, {order.country}
+                </span>
               </div>
             </div>
-            
-            <div className="next-steps">
-              <h3>What's next?</h3>
-              <ul>
-                <li>Your payment was processed and your cart has been emptied</li>
-                <li>Keep the transaction ID above for reference</li>
-                <li>Order history is not available yet — order-service is not implemented</li>
-              </ul>
+
+            <div className="order-items">
+              <h3>Items</h3>
+              {order.items.map((item) => (
+                <div key={item.productId} className="info-item">
+                  <span className="label">{item.productName} x{item.quantity}</span>
+                  <span className="value">${(Number(item.price) * item.quantity).toFixed(2)}</span>
+                </div>
+              ))}
             </div>
-            
+
             <div className="actions">
-              <Link to="/products" className="btn btn-primary">
-                Continue Shopping
+              <Link to="/orders" className="btn btn-primary">
+                View All Orders
               </Link>
-              <Link to="/" className="btn btn-secondary">
-                Back to Home
+              <Link to="/products" className="btn btn-secondary">
+                Continue Shopping
               </Link>
             </div>
           </div>

@@ -5,8 +5,8 @@
 An e-commerce web application built as Spring Boot microservices with a React frontend, running on
 Docker Compose or Kubernetes.
 
-The working flow is: **register → log in → browse the catalog → add to cart → pay**. Orders are not
-persisted, because order-service is not implemented — see [Status](#status).
+The working flow is: **register → log in → browse the catalog → add to cart → check out → order
+history**. All five services are implemented.
 
 ## Architecture Overview
 
@@ -20,8 +20,8 @@ hostname from environment variables.
 | User Service | 8081 | MySQL | Registration, login, JWT issuing, profile |
 | Product Service | 8082 | MongoDB | Catalog CRUD, search, pagination, soft delete |
 | Cart Service | 8083 | Redis | Cart with stock checks; verifies JWTs and cart ownership |
+| Order Service | 8084 | MySQL | Checkout orchestration, order history, status changes |
 | Payment Service | 8085 | none | Simulator: ~90% success, random decline reasons |
-| Order Service | 8084 | MySQL | **Not implemented** — only an empty `@SpringBootApplication` |
 
 ### Frontend
 - **React 18 + React Router** (Port 3000) — calls the real services; JWT kept in localStorage
@@ -39,10 +39,10 @@ hostname from environment variables.
 | Product catalog + search | Working, 20 tests |
 | Cart with stock limits + ownership | Working, 41 tests |
 | Payment simulation | Working, 7 tests |
+| Orders + checkout + history | Working, 31 tests |
 | Frontend shopping flow | Working, 6 tests |
-| End-to-end API suite | 46 checks, green on compose and Kubernetes |
+| End-to-end API suite | 59 checks, green on compose and Kubernetes |
 | CI on push | Unit, frontend, and e2e jobs |
-| **Orders / order history** | **Not implemented** |
 
 ## Quick Start
 
@@ -184,16 +184,19 @@ cart).
 
 ### Order Service (8084)
 
-**Not implemented.** The service starts and answers nothing — no controller, entity or repository
-exists. These are the endpoints it is intended to expose:
+All endpoints require `Authorization: Bearer <token>`. The user is taken from the token, never from
+the request — there is no `{userId}` to tamper with.
 
-- `POST /api/orders` - Create new order
-- `GET /api/orders/{userId}` - Get user's orders
-- `GET /api/orders/{orderId}` - Get order by ID
-- `PUT /api/orders/{orderId}/status` - Update order status
+- `POST /api/orders` - Check out: reads the cart from cart-service, charges payment-service, stores
+  the order, empties the cart. `201` on success, `402` if declined, `400` on an empty cart
+- `GET /api/orders` - The authenticated user's orders, newest first
+- `GET /api/orders/{orderId}` - One order (`403` if it belongs to someone else)
+- `PUT /api/orders/{orderId}/status` - Change status (`PENDING`, `PAID`, `PAYMENT_FAILED`,
+  `CANCELLED`, `SHIPPED`, `DELIVERED`)
 
-Until they exist, checkout charges payment-service with a client-generated reference and shows the
-transaction id; nothing is stored.
+The browser never sends the amount: order-service reads the basket from cart-service itself and
+charges what it computed. A declined payment still records the order as `PAYMENT_FAILED` and leaves
+the cart intact so the shopper can retry.
 
 ### Payment Service (8085)
 - `POST /api/payment/process` - Process payment
@@ -240,8 +243,8 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 17)   # macOS
 
 ### Unit Tests
 
-95 tests across the user, product, cart and payment services. No databases required — they run
-against mocks and finish in seconds.
+126 tests across all five services. Only order-service's persistence test touches a database, and
+that one uses in-memory H2 — nothing external is needed.
 
 ```bash
 # One service
@@ -262,8 +265,8 @@ What they cover:
 | user-service | 27 | password hashing, duplicate registration, patch semantics, JWT expiry/forgery/tampering, 401 vs 500 on bad credentials |
 | product-service | 20 | soft delete, stock floor at zero, active-product filtering, pagination and sort defaults, validation |
 | cart-service | 41 | line-item merging, BigDecimal totals, stock rejection, Redis TTL refresh, JSON round-trip, cart ownership, downstream outage handling |
+| order-service | 31 | checkout ordering, cart snapshotting, decline handling, order ownership, and an H2-backed test that a declined order really is persisted |
 | payment-service | 7 | success/failure branches with a stubbed `Random`, transaction ids, request validation |
-| order-service | 0 | not implemented |
 
 ### Coverage
 
@@ -277,10 +280,14 @@ open backend/cart-service/target/site/jacoco/index.html
 
 ### End-to-End Tests
 
-`test-e2e.sh` runs 46 checks against the real HTTP APIs of all four working services: registration,
-login, JWT protection, cart ownership (401 without a token, 403 for someone else's cart), product
-CRUD, search, cart merging and stock limits, and payment processing. It creates a uniquely-named
-user and product, then deletes both.
+`test-e2e.sh` runs 59 checks against the real HTTP APIs of all five services: registration, login,
+JWT protection, cart ownership (401 without a token, 403 for someone else's cart), product CRUD,
+search, cart merging and stock limits, payment processing, and the full checkout — order created,
+cart emptied, order retrievable, history listed, status advanced. It creates a uniquely-named user
+and product, then deletes both.
+
+Checkout asserts against both payment outcomes: a `201` order must be `PAID` with the cart emptied,
+a `402` must leave a `PAYMENT_FAILED` order and the cart untouched.
 
 ```bash
 # 1. Databases
@@ -291,6 +298,7 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 17)
 mvn -f backend/user-service/pom.xml    spring-boot:run
 mvn -f backend/product-service/pom.xml spring-boot:run
 mvn -f backend/cart-service/pom.xml    spring-boot:run
+mvn -f backend/order-service/pom.xml   spring-boot:run
 mvn -f backend/payment-service/pom.xml spring-boot:run
 
 # 3. Run
@@ -332,7 +340,7 @@ cluster. No Helm, no kind, no extra tooling — plain manifests in `k8s/`.
 kubectl get nodes                    # confirm it is up
 
 # 2. Build the images -- note the quotes, zsh eats an unquoted :local
-for s in user-service product-service cart-service payment-service; do
+for s in user-service product-service cart-service order-service payment-service; do
   docker build -t "ecommerce/${s}:local" "backend/${s}"
 done
 docker build -t "ecommerce/frontend:local" frontend
@@ -367,11 +375,20 @@ kubectl delete -f k8s/                       # tear down (PVCs survive; delete t
 
 Notes:
 
+- **Rebuilding an image does not redeploy it.** The cluster node caches by tag, so rebuilding
+  `:local` and running `kubectl rollout restart` silently keeps serving the old code — a stale pod
+  looks exactly like a bug in your change. After editing a service, deploy with a fresh tag:
+
+  ```bash
+  TAG=$(date +%s)
+  docker build -t "ecommerce/order-service:$TAG" backend/order-service
+  kubectl set image deploy/order-service "order-service=ecommerce/order-service:$TAG"
+  ```
+
 - **`enableServiceLinks: false` is required, not cosmetic.** Kubernetes injects Docker-link-era
   variables for every Service — `REDIS_PORT` becomes `tcp://10.96.x.x:6379`, which collides with
   this app's own `${REDIS_PORT}` / `${MYSQL_PORT}` / `${MONGODB_PORT}` placeholders and kills
   startup with a `NumberFormatException`. Removing that line breaks cart, user and product services.
-- **order-service is not deployed** — it has no endpoints, so a pod would only consume memory.
 - **The frontend is deployed** (`k8s/frontend.yaml`) on port 3000 and talks to the real services.
 - **Secrets are dev values** committed in `k8s/services.yaml`, matching docker-compose. `jwt-secret`
   must stay identical between user-service and cart-service.

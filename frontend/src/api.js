@@ -6,6 +6,7 @@ import { getToken, clearSession, cartChanged } from './auth';
 const USER_URL = process.env.REACT_APP_USER_SERVICE_URL || 'http://localhost:8081';
 const PRODUCT_URL = process.env.REACT_APP_PRODUCT_SERVICE_URL || 'http://localhost:8082';
 const CART_URL = process.env.REACT_APP_CART_SERVICE_URL || 'http://localhost:8083';
+const ORDER_URL = process.env.REACT_APP_ORDER_SERVICE_URL || 'http://localhost:8084';
 const PAYMENT_URL = process.env.REACT_APP_PAYMENT_SERVICE_URL || 'http://localhost:8085';
 
 const client = (baseURL) => {
@@ -36,6 +37,7 @@ const client = (baseURL) => {
 const users = client(USER_URL);
 const products = client(PRODUCT_URL);
 const carts = client(CART_URL);
+const orders = client(ORDER_URL);
 const payments = client(PAYMENT_URL);
 
 /**
@@ -86,3 +88,15 @@ export const clearCart = (userId) =>
 
 export const processPayment = (payload) =>
   payments.post('/api/payment/process', payload).then((r) => r.data);
+
+// order-service reads the basket from cart-service itself, so only shipping and card details are
+// sent. It empties the cart on success, hence the cart-changed announcement.
+export const placeOrder = (payload) =>
+  orders.post('/api/orders', payload).then((r) => {
+    cartChanged();
+    return r.data;
+  });
+
+export const fetchOrders = () => orders.get('/api/orders').then((r) => r.data);
+
+export const fetchOrder = (orderId) => orders.get(`/api/orders/${orderId}`).then((r) => r.data);
