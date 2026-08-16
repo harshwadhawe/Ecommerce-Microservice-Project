@@ -103,14 +103,14 @@ jobs:
 
       - name: Build service jars
         run: |
-          for service in user-service product-service cart-service payment-service; do
+          for service in user-service product-service cart-service order-service payment-service; do
             mvn -B -q -f "backend/$service/pom.xml" package -DskipTests
           done
 
       - name: Start services
         run: |
           mkdir -p logs
-          for service in user-service product-service cart-service payment-service; do
+          for service in user-service product-service cart-service order-service payment-service; do
             java -jar "backend/$service/target/$service-1.0.0.jar" > "logs/$service.log" 2>&1 &
           done
 

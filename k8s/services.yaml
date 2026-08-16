@@ -262,7 +262,9 @@ spec:
       enableServiceLinks: false
       containers:
         - name: order-service
-          image: ecommerce/order-service:local
+          # Tag bumped whenever this service changes: the cluster node caches images by tag,
+          # so re-applying an unchanged tag would keep serving the previously loaded build.
+          image: ecommerce/order-service:v2
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8084
