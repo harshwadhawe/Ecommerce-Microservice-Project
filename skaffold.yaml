@@ -1,0 +1,69 @@
+apiVersion: skaffold/v4beta6
+kind: Config
+metadata:
+  name: ecommerce
+
+# Skaffold tags every image by the digest of its contents, then rewrites the `image:` fields in
+# k8s/ to that tag before applying. That is the point of using it here: a rebuilt image can never
+# reuse a tag the cluster node has already cached, which is the failure mode that makes a pod
+# quietly serve the previous build while you debug a change that was never deployed.
+build:
+  # Content-addressed tags. The default tagger uses the git commit, which stays constant across
+  # rebuilds of uncommitted work -- that would hand the cluster node a tag it has already cached and
+  # reintroduce the stale-pod problem this file exists to prevent.
+  tagPolicy:
+    inputDigest: {}
+  local:
+    # The cluster runs on this machine, so there is nothing to push to.
+    push: false
+    # Six independent Maven builds; serialise them to avoid thrashing a laptop.
+    concurrency: 2
+  artifacts:
+    - image: ecommerce/user-service
+      docker:
+        dockerfile: Dockerfile
+      context: backend/user-service
+    - image: ecommerce/product-service
+      docker:
+        dockerfile: Dockerfile
+      context: backend/product-service
+    - image: ecommerce/cart-service
+      docker:
+        dockerfile: Dockerfile
+      context: backend/cart-service
+    - image: ecommerce/order-service
+      docker:
+        dockerfile: Dockerfile
+      context: backend/order-service
+    - image: ecommerce/payment-service
+      docker:
+        dockerfile: Dockerfile
+      context: backend/payment-service
+    - image: ecommerce/frontend
+      docker:
+        dockerfile: Dockerfile
+      context: frontend
+
+manifests:
+  rawYaml:
+    - k8s/databases.yaml
+    - k8s/services.yaml
+    - k8s/frontend.yaml
+
+deploy:
+  kubectl: {}
+  # Left to cluster.sh, which waits with `kubectl rollout status`. Skaffold's own check treats a
+  # container exit as fatal, and these services deliberately fail fast when their database is not up
+  # yet -- during a database restart that is a normal, self-healing crash loop, not a failed deploy.
+  statusCheck: false
+
+profiles:
+  # Groundwork for AWS: `skaffold run -p aws` pushes to ECR instead of building for the local node.
+  # Fill in the registry, then point the manifests at managed databases via a kustomize overlay.
+  - name: aws
+    build:
+      # Replace with <account>.dkr.ecr.<region>.amazonaws.com
+      insecureRegistries: []
+      local:
+        push: true
+      platforms: ["linux/amd64"]   # EKS nodes are x86_64; a laptop-built arm64 image will not run

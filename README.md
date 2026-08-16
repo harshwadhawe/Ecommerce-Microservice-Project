@@ -50,6 +50,7 @@ hostname from environment variables.
 
 - **Docker** — enough on its own; every image compiles itself in a multi-stage build
 - **jq** — for `test-e2e.sh` and `seed.sh`
+- **skaffold** — only for the Kubernetes path (`brew install skaffold`)
 - Java 17 and Maven 3.8+ — only to run services directly on the host
 - Node.js 18+ — only for the frontend dev server
 
@@ -337,11 +338,12 @@ instead of failing fast, and dumps the last 100 lines of every service log when 
 
 ## Kubernetes (local)
 
-Runs the frontend, all five services and their databases on Docker Desktop's built-in cluster. No
-Helm, no kind, no extra tooling — plain manifests in `k8s/`, driven by one script.
+Runs the frontend, all five services and their databases on Docker Desktop's built-in cluster.
+Plain manifests in `k8s/`, built and deployed by [Skaffold](https://skaffold.dev), wrapped in one
+script. No Helm, no kind.
 
-Enable the cluster once: **Docker Desktop → Settings → Kubernetes → Enable Kubernetes → Apply &
-Restart**. After that:
+One-time setup: enable the cluster in **Docker Desktop → Settings → Kubernetes → Enable Kubernetes →
+Apply & Restart**, and `brew install skaffold`. After that:
 
 ```bash
 ./cluster.sh up        # build images, deploy, wait for ready, seed demo data
@@ -350,13 +352,19 @@ Restart**. After that:
 ./cluster.sh destroy   # remove everything, including the data volumes
 ```
 
-`up` prints the URLs and login when it finishes, and works from a completely empty cluster. Two
-escape hatches for the slow part:
+There is also `./cluster.sh watch`, which runs `skaffold dev`: edit any file and the affected
+service rebuilds and redeploys on its own. `up` prints the URLs and login when it finishes, and works
+from a completely empty cluster.
 
 ```bash
-SKIP_BUILD=1 ./cluster.sh up    # redeploy without rebuilding the six images
-SKIP_SEED=1  ./cluster.sh up    # deploy without demo data
+SKIP_SEED=1 ./cluster.sh up     # deploy without demo data
 ```
+
+**Why Skaffold rather than a build loop in the script.** It tags every image by a digest of its
+contents, so a changed service always gets a tag the cluster has never seen. A rebuilt image can no
+longer land under a tag the node has cached — which is the failure that makes a pod keep serving the
+previous build while you debug a change that was never deployed. `skaffold.yaml` also carries an
+`aws` profile stub (push to ECR, `linux/amd64` platform) for when this moves off the laptop.
 
 **`down` keeps your data** — it removes deployments, services and the secret but leaves the
 PersistentVolumeClaims, so a later `up` finds the same users, orders and products. Verified across a
@@ -406,16 +414,23 @@ kubectl delete -f k8s/                       # same, but this DOES delete the PV
 
 Notes:
 
-- **Rebuilding an image does not redeploy it.** The cluster node caches by tag, so rebuilding
-  `:local` and running `kubectl rollout restart` silently keeps serving the old code — a stale pod
-  looks exactly like a bug in your change. `./cluster.sh up` avoids this by tagging every build
-  `build-<timestamp>` and pointing the deployments at it. By hand:
+- **A pod serving old code after a rebuild.** The cluster node caches images by tag, so rebuilding
+  `:local` and restarting the deployment keeps the previous build. `./cluster.sh up` prevents this
+  through Skaffold's content-digest tags. It only bites when deploying by hand:
 
   ```bash
   TAG=$(date +%s)
   docker build -t "ecommerce/order-service:$TAG" backend/order-service
   kubectl set image deploy/order-service "order-service=ecommerce/order-service:$TAG"
   ```
+
+- **`DBPathInUse` or "another instance is already running" from MySQL/MongoDB.** The replacement pod
+  started before the old one released the ReadWriteOnce volume. Both database deployments use
+  `strategy: Recreate` for this reason — do not change them back to the default RollingUpdate.
+
+- **Services crash-looping right after a deploy.** Restarting a database briefly takes it away, and
+  these services fail fast on a missing database. Kubernetes restarts them and they recover; this is
+  why `cluster.sh` waits with `kubectl rollout status` instead of Skaffold's stricter status check.
 
 - **Stopping pods does not free the ports.** `LoadBalancer` services hold 3000 and 8081-8085 even at
   zero replicas, so services started on the host afterwards collide with a listener that has no pods

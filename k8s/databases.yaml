@@ -18,6 +18,12 @@ metadata:
   name: mysql
 spec:
   replicas: 1
+  # Recreate, not the default RollingUpdate: the volume is ReadWriteOnce, so a replacement pod
+  # starting before the old one exits finds the data directory still locked and crashes with
+  # DBPathInUse / "another instance is already running". Any change to the pod template triggers
+  # this -- including labels a deploy tool adds.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: mysql
@@ -82,6 +88,12 @@ metadata:
   name: mongodb
 spec:
   replicas: 1
+  # Recreate, not the default RollingUpdate: the volume is ReadWriteOnce, so a replacement pod
+  # starting before the old one exits finds the data directory still locked and crashes with
+  # DBPathInUse / "another instance is already running". Any change to the pod template triggers
+  # this -- including labels a deploy tool adds.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: mongodb
