@@ -60,7 +60,7 @@ git clone https://github.com/harshwadhawe/Ecommerce-Microservice-Project.git
 cd Ecommerce-Microservice-Project
 
 docker-compose up -d --build   # images build from source; no prior mvn package needed
-./seed.sh                      # demo catalog, users, and one filled cart
+./seed.sh                      # demo catalog, users, a filled cart and an order
 ```
 
 Then open **http://localhost:3000** and log in as `alice@example.com` / `password123`.
@@ -85,7 +85,7 @@ mvn -f backend/user-service/pom.xml    spring-boot:run   # :8081  needs mysql
 mvn -f backend/product-service/pom.xml spring-boot:run   # :8082  needs mongodb
 mvn -f backend/cart-service/pom.xml    spring-boot:run   # :8083  needs redis + product-service
 mvn -f backend/payment-service/pom.xml spring-boot:run   # :8085  no dependencies
-mvn -f backend/order-service/pom.xml   spring-boot:run   # :8084  starts, serves nothing
+mvn -f backend/order-service/pom.xml   spring-boot:run   # :8084  needs mysql + cart + payment
 ```
 
 Check they are up with `curl localhost:8081/actuator/health`.
@@ -108,6 +108,9 @@ the payment transaction id, and there is no order history.
 
 ## Database Setup
 
+These are the docker-compose credentials; the Kubernetes deployment uses the same values, supplied
+from the `ecommerce-secrets` Secret.
+
 ### MySQL (User and Order Services)
 - Host: localhost:3306
 - Database: ecommerce
@@ -126,8 +129,9 @@ the payment transaction id, and there is no order history.
 
 ## Seed Data
 
-`./seed.sh` fills an empty environment with a demo catalog, users, and one populated cart. Re-running
-is safe: products already present by name are skipped and existing emails are left alone.
+`./seed.sh` fills an empty environment with a demo catalog, users, one populated cart and one order.
+Re-running is safe: products already present by name are skipped, existing emails are left alone, and
+a user who already has a cart or an order keeps it. `./cluster.sh up` runs it for you.
 
 ```bash
 ./seed.sh                # localhost (docker-compose or the k8s cluster)
@@ -148,7 +152,9 @@ for more triggers cart-service's stock rejection.
 | dave@example.com | Dave Okafor |
 
 Alice starts with a Laptop and a Wireless Mouse in her cart, so the header badge and cart page have
-something to show on first login.
+something to show on first login. Bob starts with one completed order, so the Orders page is not
+empty either — the payment simulator declines roughly one attempt in ten, so the script retries a
+couple of times to make that order `PAID`.
 
 Requires `jq`, and the user, product and cart services to be running.
 
@@ -227,11 +233,11 @@ the cart intact so the shopper can retry.
 - `JWT_SECRET` - Must be identical to user-service's, or every cart request returns 401
 
 #### Order Service
-- `MYSQL_HOST` - MySQL host
-- `USER_SERVICE_URL` - User service URL
-- `PRODUCT_SERVICE_URL` - Product service URL
-- `CART_SERVICE_URL` - Cart service URL
+- `MYSQL_HOST` - MySQL host (default: localhost)
+- `MYSQL_USERNAME` / `MYSQL_PASSWORD` - Database credentials
+- `CART_SERVICE_URL` - Cart service URL (the basket is read from here at checkout)
 - `PAYMENT_SERVICE_URL` - Payment service URL
+- `JWT_SECRET` - Must match user-service's, or every order request returns 401
 
 ## Testing
 
@@ -251,7 +257,7 @@ that one uses in-memory H2 — nothing external is needed.
 mvn -f backend/cart-service/pom.xml test
 
 # All services
-for s in user product cart payment; do mvn -f backend/$s-service/pom.xml test; done
+for s in user product cart order payment; do mvn -f backend/$s-service/pom.xml test; done
 
 # A single class, or a single method
 mvn -f backend/cart-service/pom.xml test -Dtest=CartServiceTest
@@ -280,7 +286,7 @@ open backend/cart-service/target/site/jacoco/index.html
 
 ### End-to-End Tests
 
-`test-e2e.sh` runs 59 checks against the real HTTP APIs of all five services: registration, login,
+`test-e2e.sh` runs 59 checks against the real HTTP APIs of all five services (51 on the runs where the payment simulator declines, since the failure branch asserts less): registration, login,
 JWT protection, cart ownership (401 without a token, 403 for someone else's cart), product CRUD,
 search, cart merging and stock limits, payment processing, and the full checkout — order created,
 cart emptied, order retrievable, history listed, status advanced. It creates a uniquely-named user
@@ -328,32 +334,56 @@ instead of failing fast, and dumps the last 100 lines of every service log when 
   the e2e script. Testcontainers-backed `@DataMongoTest` would verify them properly.
 - **Frontend component tests.** `src/api.test.js` covers error extraction and session handling, but
   no test renders a page. Worth adding once the UI stops changing shape.
-- **Order flow.** Blocked on order-service.
 
 ## Kubernetes (local)
 
-Runs the frontend, the four working services and their databases on Docker Desktop's built-in
-cluster. No Helm, no kind, no extra tooling — plain manifests in `k8s/`.
+Runs the frontend, all five services and their databases on Docker Desktop's built-in cluster. No
+Helm, no kind, no extra tooling — plain manifests in `k8s/`, driven by one script.
+
+Enable the cluster once: **Docker Desktop → Settings → Kubernetes → Enable Kubernetes → Apply &
+Restart**. After that:
 
 ```bash
-# 1. Enable the cluster: Docker Desktop -> Settings -> Kubernetes -> Enable (one time)
-kubectl get nodes                    # confirm it is up
+./cluster.sh up        # build images, deploy, wait for ready, seed demo data
+./cluster.sh status    # what is running, and on which ports
+./cluster.sh down      # remove the app, keep the database contents
+./cluster.sh destroy   # remove everything, including the data volumes
+```
 
-# 2. Build the images -- note the quotes, zsh eats an unquoted :local
+`up` prints the URLs and login when it finishes, and works from a completely empty cluster. Two
+escape hatches for the slow part:
+
+```bash
+SKIP_BUILD=1 ./cluster.sh up    # redeploy without rebuilding the six images
+SKIP_SEED=1  ./cluster.sh up    # deploy without demo data
+```
+
+**`down` keeps your data** — it removes deployments, services and the secret but leaves the
+PersistentVolumeClaims, so a later `up` finds the same users, orders and products. Verified across a
+full cycle: 4 users, 1 order and 13 products all survived `down` → `up`. `destroy` is the one that
+erases them.
+
+Treat that as convenience, not durability. This is a laptop cluster on ephemeral local-path volumes,
+and the contents can disappear for reasons outside the script — a Docker Desktop restart, a node
+rebuild, or resource pressure. `./cluster.sh up` reseeds from scratch, so nothing here is worth
+mourning.
+
+Because the ports match docker-compose, both scripts work against the cluster unchanged:
+
+```bash
+./test-e2e.sh
+./seed.sh
+```
+
+Doing it by hand instead of using the script:
+
+```bash
 for s in user-service product-service cart-service order-service payment-service; do
-  docker build -t "ecommerce/${s}:local" "backend/${s}"
+  docker build -t "ecommerce/${s}:local" "backend/${s}"   # quote it: zsh eats an unquoted :local
 done
 docker build -t "ecommerce/frontend:local" frontend
-
-# 3. Deploy
 kubectl apply -f k8s/
-
-# 4. Watch it come up (databases first, then services)
 kubectl get pods -w
-
-# 5. Same ports as docker-compose, so both scripts work unchanged
-./seed.sh
-./test-e2e.sh
 ```
 
 Services are `type: LoadBalancer`, which Docker Desktop maps onto localhost — so 3000 and
@@ -370,20 +400,27 @@ kubectl logs -f deploy/cart-service
 kubectl describe pod -l app=cart-service     # why a pod is not ready
 kubectl rollout restart deploy/cart-service  # rolling restart, zero dropped requests
 kubectl delete pod -l app=cart-service       # watch it come back on its own
-kubectl delete -f k8s/                       # tear down (PVCs survive; delete those separately)
+./cluster.sh down                            # tear down, keep data
+kubectl delete -f k8s/                       # same, but this DOES delete the PVCs and your data
 ```
 
 Notes:
 
 - **Rebuilding an image does not redeploy it.** The cluster node caches by tag, so rebuilding
   `:local` and running `kubectl rollout restart` silently keeps serving the old code — a stale pod
-  looks exactly like a bug in your change. After editing a service, deploy with a fresh tag:
+  looks exactly like a bug in your change. `./cluster.sh up` avoids this by tagging every build
+  `build-<timestamp>` and pointing the deployments at it. By hand:
 
   ```bash
   TAG=$(date +%s)
   docker build -t "ecommerce/order-service:$TAG" backend/order-service
   kubectl set image deploy/order-service "order-service=ecommerce/order-service:$TAG"
   ```
+
+- **Stopping pods does not free the ports.** `LoadBalancer` services hold 3000 and 8081-8085 even at
+  zero replicas, so services started on the host afterwards collide with a listener that has no pods
+  behind it — which shows up as connection-closed errors rather than "port in use". `./cluster.sh
+  down` deletes the services for this reason.
 
 - **`enableServiceLinks: false` is required, not cosmetic.** Kubernetes injects Docker-link-era
   variables for every Service — `REDIS_PORT` becomes `tcp://10.96.x.x:6379`, which collides with
@@ -505,12 +542,20 @@ No license file has been added yet, so default copyright applies.
 7. **Memory** — five JVMs plus three databases need roughly 4GB of Docker memory.
 
 ### Logs
-```bash
-# View logs for specific service
-docker-compose logs user-service
 
-# View logs for all services
+Docker Compose:
+
+```bash
+docker-compose logs -f user-service
 docker-compose logs -f
+```
+
+Kubernetes:
+
+```bash
+kubectl logs -f deploy/order-service
+kubectl describe pod -l app=order-service    # why a pod is not ready
+./cluster.sh status
 ```
 
 ## Support
