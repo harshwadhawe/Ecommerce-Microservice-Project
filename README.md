@@ -339,8 +339,10 @@ instead of failing fast, and dumps the last 100 lines of every service log when 
 ## Kubernetes (local)
 
 Runs the frontend, all five services and their databases on Docker Desktop's built-in cluster.
-Plain manifests in `k8s/`, built and deployed by [Skaffold](https://skaffold.dev), wrapped in one
-script. No Helm, no kind.
+One Helm chart in `helm/ecommerce`, built and deployed by [Skaffold](https://skaffold.dev) and
+wrapped in one script. The same chart is what Argo CD deploys (see
+[GitOps with Argo CD](#gitops-with-argo-cd)), so there is a single source of truth for what runs in
+the cluster.
 
 One-time setup: enable the cluster in **Docker Desktop → Settings → Kubernetes → Enable Kubernetes →
 Apply & Restart**, and `brew install skaffold`. After that:
@@ -390,7 +392,7 @@ for s in user-service product-service cart-service order-service payment-service
   docker build -t "ecommerce/${s}:local" "backend/${s}"   # quote it: zsh eats an unquoted :local
 done
 docker build -t "ecommerce/frontend:local" frontend
-kubectl apply -f k8s/
+helm upgrade --install ecommerce helm/ecommerce   # the chart's defaults use the :local tags
 kubectl get pods -w
 ```
 
@@ -409,7 +411,7 @@ kubectl describe pod -l app=cart-service     # why a pod is not ready
 kubectl rollout restart deploy/cart-service  # rolling restart, zero dropped requests
 kubectl delete pod -l app=cart-service       # watch it come back on its own
 ./cluster.sh down                            # tear down, keep data
-kubectl delete -f k8s/                       # same, but this DOES delete the PVCs and your data
+helm uninstall ecommerce && kubectl delete pvc --all   # also deletes the database volumes
 ```
 
 Notes:
@@ -441,12 +443,81 @@ Notes:
   variables for every Service — `REDIS_PORT` becomes `tcp://10.96.x.x:6379`, which collides with
   this app's own `${REDIS_PORT}` / `${MYSQL_PORT}` / `${MONGODB_PORT}` placeholders and kills
   startup with a `NumberFormatException`. Removing that line breaks cart, user and product services.
-- **The frontend is deployed** (`k8s/frontend.yaml`) on port 3000 and talks to the real services.
-- **Secrets are dev values** committed in `k8s/services.yaml`, matching docker-compose. `jwt-secret`
+- **The frontend is deployed** (`apps.frontend` in `values.yaml`) on port 3000 and talks to the real services.
+- **Secrets are dev values** in `helm/ecommerce/values.yaml`, matching docker-compose. `jwtSecret`
   must stay identical between user-service and cart-service.
 - **Databases run in-cluster with PVCs** for MySQL and MongoDB. Redis has no volume on purpose —
-  carts are a 24h-TTL cache. For anything beyond local use, point at managed databases and delete
-  `k8s/databases.yaml`.
+  carts are a 24h-TTL cache. For anything beyond local use, point at managed databases and set
+  `databases.enabled=false`.
+
+### The Helm chart
+
+```
+helm/ecommerce/
+  values.yaml              images, ports, env, probes and resources for every service; dev databases
+  templates/apps.yaml      Deployment + Service for each entry under apps:
+  templates/databases.yaml MySQL, MongoDB (with PVCs, Recreate strategy) and Redis, behind databases.enabled
+  templates/secret.yaml    ecommerce-secrets
+```
+
+The five services and the frontend share one template, so a new service is a block in `values.yaml`
+rather than another 60 lines of YAML. Selectors keep the original `app: <name>` label — selectors
+are immutable, and changing them would have forced every Deployment to be deleted and recreated.
+
+The chart was converted from the previous plain manifests and checked against them object by
+object: all 21 rendered objects are identical apart from the standard Helm labels. CI lints the
+chart and validates the rendered output against the Kubernetes API schemas with kubeconform, with
+and without the bundled databases.
+
+```bash
+helm template ecommerce helm/ecommerce                                # see exactly what gets applied
+helm template ecommerce helm/ecommerce --set databases.enabled=false  # managed-database variant
+```
+
+### GitOps with Argo CD
+
+`argocd/application.yaml` points Argo CD at `helm/ecommerce` on `master` and keeps the cluster in
+that state:
+
+- **automated sync** — merging to master deploys; nobody runs a deploy command;
+- **selfHeal** — a manual change in the cluster (`kubectl scale`, `kubectl edit`, a deleted
+  Deployment) is reverted to what Git declares;
+- **prune** — a resource removed from the chart is removed from the cluster;
+- **retry with backoff** — rides out the few seconds services crash-loop while a database starts.
+
+Argo CD deploys images; it does not build them. On Docker Desktop, build the `:local` images first,
+then install Argo CD and hand it the Application:
+
+```bash
+./cluster.sh down     # the Skaffold deployment holds ports 3000 and 8081-8085; free them first
+
+for s in user-service product-service cart-service order-service payment-service; do
+  docker build -t "ecommerce/${s}:local" "backend/${s}"
+done
+docker build -t "ecommerce/frontend:local" frontend
+
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/v2.13.0/manifests/install.yaml
+kubectl -n argocd rollout status deploy/argocd-server
+kubectl apply -f argocd/application.yaml
+
+kubectl -n argocd get application ecommerce -w   # wait for Synced / Healthy
+```
+
+See self-heal enforce the declared state:
+
+```bash
+kubectl -n ecommerce scale deploy/cart-service --replicas=0
+kubectl -n ecommerce get deploy cart-service -w   # Argo CD puts it back to 1 replica
+```
+
+The UI is at `kubectl -n argocd port-forward svc/argocd-server 8443:443` → https://localhost:8443
+(user `admin`, password from `kubectl -n argocd get secret argocd-initial-admin-secret -o
+jsonpath='{.data.password}' | base64 -d`).
+
+On a real cluster the only changes are values: point `apps.*.image` at a registry, set
+`databases.enabled=false` and `serviceType=ClusterIP`, and move secrets out of `values.yaml`
+into a secrets manager.
 
 ## AWS Deployment
 
@@ -481,9 +552,9 @@ Notes:
    ```
 
 3. **Deploy to EKS or ECS**
-   - The manifests in `k8s/` are the closest starting point: swap `image:` for ECR references,
-     delete `k8s/databases.yaml` in favour of RDS/DocumentDB/ElastiCache, and replace the
-     `LoadBalancer` services with an Ingress.
+   - The Helm chart is the starting point: set `apps.*.image` to the ECR references,
+     `databases.enabled=false` in favour of RDS/DocumentDB/ElastiCache, and `serviceType=ClusterIP`
+     behind an Ingress. Argo CD can then deploy it to EKS from Git.
    - Move `ecommerce-secrets` out of the manifest into Secrets Manager or SSM.
 
 None of this AWS section has been executed — unlike the local Kubernetes path, it is untested.
@@ -506,7 +577,7 @@ Known limitations, deliberately not hidden:
 
 - product-service and payment-service are **unauthenticated** — anyone can create or delete products.
 - CORS allows any origin (`allowedOriginPatterns("*")`), appropriate for local development only.
-- Secrets are committed as dev defaults in `docker-compose.yml` and `k8s/services.yaml`.
+- Secrets are committed as dev defaults in `docker-compose.yml` and `helm/ecommerce/values.yaml`.
 - Card details are posted to the payment simulator in plaintext JSON; it is not a real gateway.
 
 ## Performance

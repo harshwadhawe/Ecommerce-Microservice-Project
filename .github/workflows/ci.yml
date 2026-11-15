@@ -51,6 +51,30 @@ jobs:
       - run: npm run build
         working-directory: frontend
 
+  chart:
+    name: Helm chart (lint + schema)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Lint
+        run: helm lint --strict helm/ecommerce
+
+      # Render exactly what Skaffold and Argo CD deploy and validate every object against the
+      # Kubernetes API schemas, so a broken template fails here instead of in a cluster sync.
+      - name: Validate rendered manifests
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          helm template ecommerce helm/ecommerce | ./kubeconform -strict -summary
+          helm template ecommerce helm/ecommerce --set databases.enabled=false | ./kubeconform -strict -summary
+          ./kubeconform -strict -summary -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            argocd/application.yaml
+
   e2e:
     name: End-to-end API tests
     runs-on: ubuntu-latest

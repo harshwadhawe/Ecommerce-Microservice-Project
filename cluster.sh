@@ -41,8 +41,8 @@ up() {
     require_skaffold
 
     echo "Building and deploying (skaffold)"
-    # `run` builds every artifact, rewrites the image references in k8s/ to content-digest tags and
-    # applies them. Waiting is done below rather than by skaffold: restarting a database briefly
+    # `run` builds every artifact, renders the Helm chart with content-digest image tags and
+    # applies it. Waiting is done below rather than by skaffold: restarting a database briefly
     # crash-loops the services that depend on it, which is recovery, not failure.
     skaffold run 2>&1 | grep -vE '^\s+>|Waited before sending request' | sed 's/^/  /'
 
@@ -98,7 +98,7 @@ destroy() {
     if command -v skaffold >/dev/null; then
         skaffold delete 2>&1 | sed 's/^/  /' || true
     else
-        kubectl delete -f k8s/ --ignore-not-found 2>/dev/null | sed 's/^/  /' || true
+        helm template ecommerce helm/ecommerce | kubectl delete -f - --ignore-not-found 2>/dev/null | sed 's/^/  /' || true
     fi
     kubectl delete pvc --all --ignore-not-found 2>/dev/null | sed 's/^/  /' || true
     echo

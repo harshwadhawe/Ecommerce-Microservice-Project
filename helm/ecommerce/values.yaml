@@ -1,0 +1,144 @@
+# Defaults reproduce the old plain manifests exactly: Docker Desktop's cluster, images built on this
+# machine (`:local`), LoadBalancer services on localhost:3000 and 8081-8085, in-cluster dev databases.
+#
+# Resource names are fixed (user-service, mysql, ...) rather than prefixed with the release name,
+# because the services find each other and their databases by those DNS names. One release per
+# namespace.
+
+# IfNotPresent: images are built locally and never pushed, so there is nothing to pull.
+imagePullPolicy: IfNotPresent
+
+# LoadBalancer maps straight onto localhost on Docker Desktop, so ./test-e2e.sh and ./seed.sh work
+# unchanged. Use ClusterIP behind an ingress on a real cluster.
+serviceType: LoadBalancer
+
+# Dev values, matching docker-compose. Replace before this leaves a laptop -- and note that
+# user-service and cart-service must agree on jwtSecret or every cart request returns 401.
+secrets:
+  name: ecommerce-secrets
+  jwtSecret: mySecretKey123456789012345678901234567890
+  mysqlPassword: password
+  mysqlRootPassword: rootpassword
+  mongodbPassword: password
+
+# Spring services use /actuator/health with a startupProbe that absorbs JVM boot and the wait for
+# their database; the frontend (nginx) is up in a second and has neither.
+apps:
+  user-service:
+    image: {repository: ecommerce/user-service, tag: local}
+    port: 8081
+    healthPath: /actuator/health
+    startupProbe: true
+    env:
+      - {name: MYSQL_HOST, value: mysql}
+      - {name: MYSQL_USERNAME, value: ecommerce}
+      - name: MYSQL_PASSWORD
+        valueFrom: {secretKeyRef: {name: ecommerce-secrets, key: mysql-password}}
+      - name: JWT_SECRET
+        valueFrom: {secretKeyRef: {name: ecommerce-secrets, key: jwt-secret}}
+    resources:
+      requests: {memory: 384Mi, cpu: 100m}
+      limits: {memory: 768Mi}
+
+  product-service:
+    image: {repository: ecommerce/product-service, tag: local}
+    port: 8082
+    healthPath: /actuator/health
+    startupProbe: true
+    env:
+      - {name: MONGODB_HOST, value: mongodb}
+      - {name: MONGODB_USERNAME, value: admin}
+      - name: MONGODB_PASSWORD
+        valueFrom: {secretKeyRef: {name: ecommerce-secrets, key: mongodb-password}}
+    resources:
+      requests: {memory: 384Mi, cpu: 100m}
+      limits: {memory: 768Mi}
+
+  cart-service:
+    image: {repository: ecommerce/cart-service, tag: local}
+    port: 8083
+    healthPath: /actuator/health
+    startupProbe: true
+    env:
+      - {name: REDIS_HOST, value: redis}
+      - {name: PRODUCT_SERVICE_URL, value: "http://product-service:8082"}
+      - name: JWT_SECRET
+        valueFrom: {secretKeyRef: {name: ecommerce-secrets, key: jwt-secret}}
+    resources:
+      requests: {memory: 384Mi, cpu: 100m}
+      limits: {memory: 768Mi}
+
+  order-service:
+    image: {repository: ecommerce/order-service, tag: local}
+    port: 8084
+    healthPath: /actuator/health
+    startupProbe: true
+    env:
+      - {name: MYSQL_HOST, value: mysql}
+      - {name: MYSQL_USERNAME, value: ecommerce}
+      - name: MYSQL_PASSWORD
+        valueFrom: {secretKeyRef: {name: ecommerce-secrets, key: mysql-password}}
+      - name: JWT_SECRET
+        valueFrom: {secretKeyRef: {name: ecommerce-secrets, key: jwt-secret}}
+      - {name: CART_SERVICE_URL, value: "http://cart-service:8083"}
+      - {name: PAYMENT_SERVICE_URL, value: "http://payment-service:8085"}
+    resources:
+      requests: {memory: 384Mi, cpu: 100m}
+      limits: {memory: 768Mi}
+
+  payment-service:
+    image: {repository: ecommerce/payment-service, tag: local}
+    port: 8085
+    healthPath: /actuator/health
+    startupProbe: true
+    resources:
+      requests: {memory: 256Mi, cpu: 100m}
+      limits: {memory: 512Mi}
+
+  # The React app, served by nginx. The bundle talks to the services at localhost:8081-8085 (baked
+  # in at build time) -- cluster-internal DNS names mean nothing to code running in a browser.
+  frontend:
+    image: {repository: ecommerce/frontend, tag: local}
+    port: 3000
+    healthPath: /
+    readinessInitialDelaySeconds: 3
+    resources:
+      requests: {memory: 32Mi, cpu: 50m}
+      limits: {memory: 128Mi}
+
+# Single-replica dev databases. On a real cluster set enabled: false and point the services' *_HOST
+# values at RDS / DocumentDB / ElastiCache instead.
+databases:
+  enabled: true
+  mysql:
+    image: mysql:8.0
+    port: 3306
+    storage: 2Gi
+    mountPath: /var/lib/mysql
+    readinessCommand: ["mysqladmin", "ping", "-h", "127.0.0.1"]
+    readinessInitialDelaySeconds: 15
+    env:
+      - name: MYSQL_ROOT_PASSWORD
+        valueFrom: {secretKeyRef: {name: ecommerce-secrets, key: mysql-root-password}}
+      - {name: MYSQL_DATABASE, value: ecommerce}
+      - {name: MYSQL_USER, value: ecommerce}
+      - name: MYSQL_PASSWORD
+        valueFrom: {secretKeyRef: {name: ecommerce-secrets, key: mysql-password}}
+  mongodb:
+    image: mongo:6.0
+    port: 27017
+    storage: 2Gi
+    mountPath: /data/db
+    readinessCommand: ["mongosh", "--quiet", "--eval", "db.adminCommand({ping:1})"]
+    readinessInitialDelaySeconds: 10
+    env:
+      - {name: MONGO_INITDB_ROOT_USERNAME, value: admin}
+      - name: MONGO_INITDB_ROOT_PASSWORD
+        valueFrom: {secretKeyRef: {name: ecommerce-secrets, key: mongodb-password}}
+      - {name: MONGO_INITDB_DATABASE, value: productdb}
+  # No volume: carts are a 24h-TTL cache, and losing them on restart is acceptable here.
+  redis:
+    image: redis:7.0-alpine
+    port: 6379
+    readinessCommand: ["redis-cli", "ping"]
+    readinessInitialDelaySeconds: 5

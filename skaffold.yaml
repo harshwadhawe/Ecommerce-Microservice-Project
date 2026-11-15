@@ -3,8 +3,8 @@ kind: Config
 metadata:
   name: ecommerce
 
-# Skaffold tags every image by the digest of its contents, then rewrites the `image:` fields in
-# k8s/ to that tag before applying. That is the point of using it here: a rebuilt image can never
+# Skaffold tags every image by the digest of its contents, then renders the Helm chart in
+# helm/ecommerce with those tags (setValueTemplates below) before applying. That is the point of using it here: a rebuilt image can never
 # reuse a tag the cluster node has already cached, which is the failure mode that makes a pod
 # quietly serve the previous build while you debug a change that was never deployed.
 build:
@@ -44,11 +44,27 @@ build:
         dockerfile: Dockerfile
       context: frontend
 
+# The chart in helm/ecommerce is the single source of truth -- Skaffold, Argo CD (argocd/) and a
+# hand-run `helm upgrade --install` all render the same thing. Skaffold renders it with `helm template`
+# and applies with kubectl, so there is no Helm release state to drift from what Argo CD sees.
 manifests:
-  rawYaml:
-    - k8s/databases.yaml
-    - k8s/services.yaml
-    - k8s/frontend.yaml
+  helm:
+    releases:
+      - name: ecommerce
+        chartPath: helm/ecommerce
+        setValueTemplates:
+          apps.user-service.image.repository: "{{.IMAGE_REPO_ecommerce_user_service}}"
+          apps.user-service.image.tag: "{{.IMAGE_TAG_ecommerce_user_service}}"
+          apps.product-service.image.repository: "{{.IMAGE_REPO_ecommerce_product_service}}"
+          apps.product-service.image.tag: "{{.IMAGE_TAG_ecommerce_product_service}}"
+          apps.cart-service.image.repository: "{{.IMAGE_REPO_ecommerce_cart_service}}"
+          apps.cart-service.image.tag: "{{.IMAGE_TAG_ecommerce_cart_service}}"
+          apps.order-service.image.repository: "{{.IMAGE_REPO_ecommerce_order_service}}"
+          apps.order-service.image.tag: "{{.IMAGE_TAG_ecommerce_order_service}}"
+          apps.payment-service.image.repository: "{{.IMAGE_REPO_ecommerce_payment_service}}"
+          apps.payment-service.image.tag: "{{.IMAGE_TAG_ecommerce_payment_service}}"
+          apps.frontend.image.repository: "{{.IMAGE_REPO_ecommerce_frontend}}"
+          apps.frontend.image.tag: "{{.IMAGE_TAG_ecommerce_frontend}}"
 
 deploy:
   kubectl: {}

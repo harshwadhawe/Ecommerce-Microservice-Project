@@ -1,0 +1,66 @@
+{{- range $name, $app := .Values.apps }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ecommerce.labels" $ | nindent 4 }}
+spec:
+  replicas: {{ $app.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+    spec:
+      # Kubernetes otherwise injects Docker-link-era vars for every Service -- REDIS_PORT becomes
+      # "tcp://10.96.x.x:6379", which collides with this app's own ${REDIS_PORT}/${MYSQL_PORT}/
+      # ${MONGODB_PORT} placeholders and fails startup on a NumberFormatException.
+      enableServiceLinks: false
+      containers:
+        - name: {{ $name }}
+          image: "{{ $app.image.repository }}:{{ $app.image.tag }}"
+          imagePullPolicy: {{ $.Values.imagePullPolicy }}
+          ports:
+            - containerPort: {{ $app.port }}
+          {{- with $app.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if $app.startupProbe }}
+          # startupProbe absorbs JVM boot and the wait for the database; the other two only take
+          # over once the app is up, so a slow start is not mistaken for a hung process.
+          startupProbe:
+            httpGet: {path: {{ $app.healthPath }}, port: {{ $app.port }}}
+            periodSeconds: 5
+            failureThreshold: 30
+          {{- end }}
+          readinessProbe:
+            httpGet: {path: {{ $app.healthPath }}, port: {{ $app.port }}}
+            {{- with $app.readinessInitialDelaySeconds }}
+            initialDelaySeconds: {{ . }}
+            {{- end }}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: {{ $app.healthPath }}, port: {{ $app.port }}}
+            periodSeconds: 20
+          resources:
+            {{- toYaml $app.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ecommerce.labels" $ | nindent 4 }}
+spec:
+  type: {{ $.Values.serviceType }}
+  selector:
+    app: {{ $name }}
+  ports:
+    - port: {{ $app.port }}
+      targetPort: {{ $app.port }}
+{{- end }}

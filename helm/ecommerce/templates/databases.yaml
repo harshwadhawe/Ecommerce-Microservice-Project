@@ -1,0 +1,81 @@
+{{- if .Values.databases.enabled }}
+{{- range $name, $db := omit .Values.databases "enabled" }}
+{{- if $db.storage }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-data
+  labels:
+    {{- include "ecommerce.labels" $ | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ $db.storage }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ecommerce.labels" $ | nindent 4 }}
+spec:
+  replicas: 1
+  {{- if $db.storage }}
+  # Recreate, not the default RollingUpdate: the volume is ReadWriteOnce, so a replacement pod
+  # starting before the old one exits finds the data directory still locked and crashes with
+  # DBPathInUse / "another instance is already running". Any change to the pod template triggers
+  # this -- including labels a deploy tool adds.
+  strategy:
+    type: Recreate
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+    spec:
+      containers:
+        - name: {{ $name }}
+          image: {{ $db.image }}
+          ports:
+            - containerPort: {{ $db.port }}
+          {{- with $db.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if $db.storage }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ $db.mountPath }}
+          {{- end }}
+          readinessProbe:
+            exec:
+              command: {{ toJson $db.readinessCommand }}
+            initialDelaySeconds: {{ $db.readinessInitialDelaySeconds }}
+            periodSeconds: 5
+      {{- if $db.storage }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $name }}-data
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ecommerce.labels" $ | nindent 4 }}
+spec:
+  selector:
+    app: {{ $name }}
+  ports:
+    - port: {{ $db.port }}
+      targetPort: {{ $db.port }}
+{{- end }}
+{{- end }}
