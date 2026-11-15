@@ -1,0 +1,40 @@
+# GitOps deployment: Argo CD watches helm/ecommerce on master and keeps the cluster in that state.
+#
+#   automated  -- a push to master is applied without anyone running a deploy command
+#   selfHeal   -- a hand edit in the cluster (kubectl scale, edit, delete) is reverted to Git
+#   prune      -- a resource removed from the chart is deleted from the cluster
+#
+# Argo CD deploys images, it does not build them: the default values expect `ecommerce/*:local`
+# images already on the node (see "GitOps with Argo CD" in the README).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ecommerce
+  namespace: argocd
+  # Deleting the Application also deletes what it deployed, instead of orphaning it.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/harshwadhawe/Ecommerce-Microservice-Project.git
+    targetRevision: master
+    path: helm/ecommerce
+    helm:
+      releaseName: ecommerce
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ecommerce
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    # Services crash-loop for a few seconds while their database starts; retry instead of failing.
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
